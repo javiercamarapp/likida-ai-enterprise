@@ -19,4 +19,5 @@ node_modules/
 .railway/
 .env.railway
 nixpacks.toml
-*.db-shm\n*.db-wal
+*.db-shm
+*.db-wal
