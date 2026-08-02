@@ -341,13 +341,20 @@ def build_v2_router(db: Database, require_api_key, auth=None):
                              dbx=None):
         from collections import Counter
         dbx = dbx or db
-        raw = []
-        for p in paths:
-            raw.append(_process_one(tenant_id, p, dbx))
+        # BUG-F29: Process in chunks of 50 to avoid OOM with large batches
+        CHUNK_SIZE = 50
+        all_paths = list(paths)
         if folder:
             import glob
-            for f in sorted(glob.glob(folder + "/*.xml")):
-                raw.append(_process_one(tenant_id, f, dbx))
+            all_paths.extend(sorted(glob.glob(folder + "/*.xml")))
+
+        raw = []
+        for i in range(0, len(all_paths), CHUNK_SIZE):
+            chunk = all_paths[i:i + CHUNK_SIZE]
+            for p in chunk:
+                raw.append(_process_one(tenant_id, p, dbx))
+            # BUG-F29: Force GC between chunks to free parsed XML memory
+            gc.collect()
         ok = sum(1 for r in raw
                  if r.get("validacion", {}).get("ok"))
         inserted = sum(1 for r in raw if r.get("insertado"))
@@ -438,8 +445,12 @@ def build_v2_router(db: Database, require_api_key, auth=None):
                 if job_id in _JOBS:
                     _JOBS[job_id]["status"] = "error"
                     _JOBS[job_id]["error"] = str(e)
+                    _JOBS[job_id]["completed_at"] = datetime.now().isoformat(timespec="seconds")
         finally:
             dbx.close()
+
+    # BUG-F31: Use ThreadPoolExecutor with bounded workers instead of raw Thread
+    _batch_executor = ThreadPoolExecutor(max_workers=4)
 
     @router.get("/batch/{job_id}",
                 summary="Estado y resultado de un lote async.")
