@@ -4,6 +4,8 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 *.egg-info/
 build/
 dist/
@@ -12,3 +14,11 @@ b2b_ai.db
 .DS_Store
 .env
 fixtures/
+.git/
+.gitignore
+.coverage
+demo-data/
+demo-output/
+tests/
+docs/
+scripts/
