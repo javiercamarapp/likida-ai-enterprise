@@ -17,6 +17,9 @@ Includes:
     - Error recovery with automatic retries
     - Health checks for all drivers
     - Structured logging for all operations
+    - Canonical driver interface (ComputerUseDriver ABC)
+    - Factory pattern for driver creation
+    - Config from environment variables with validation
 """
 from b2b_ai.computer_use.browser import (
     BrowserAutomation,
@@ -54,6 +57,22 @@ from b2b_ai.computer_use.playwright_desktop import PlaywrightDesktop, _retry_asy
 from b2b_ai.computer_use.contpaqi_real_driver import CONTPAQiRealDriver
 from b2b_ai.computer_use.aspel_real_driver import AspelRealDriver
 
+# New: canonical interface, config, factory
+from b2b_ai.computer_use.interface import (
+    ComputerUseDriver,
+    DriverResult,
+    DriverResultStatus,
+)
+from b2b_ai.computer_use.config import (
+    ComputerUseConfig,
+    ComputerUseConfigurationError,
+)
+from b2b_ai.computer_use.factory import (
+    ComputerUseDriverFactory,
+    DisabledDriver,
+    MockComputerUseDriver,
+)
+
 __all__ = [
     # web ERPs
     "BrowserAutomation",
@@ -88,4 +107,13 @@ __all__ = [
     "CONTPAQiRealDriver",
     "AspelRealDriver",
     "_retry_async",
+    # Canonical interface + factory (FASE 2)
+    "ComputerUseDriver",
+    "DriverResult",
+    "DriverResultStatus",
+    "ComputerUseConfig",
+    "ComputerUseConfigurationError",
+    "ComputerUseDriverFactory",
+    "DisabledDriver",
+    "MockComputerUseDriver",
 ]

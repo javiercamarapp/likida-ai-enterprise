@@ -485,6 +485,32 @@ def create_app(db=None):
         # de esa reconfiguración y garantiza que el JSON log quede activo.
         get_structured_logger("api")
 
+        # Computer Use driver: initialize from env config.
+        from b2b_ai.computer_use.factory import ComputerUseDriverFactory
+        from b2b_ai.computer_use.config import (
+            ComputerUseConfig, ComputerUseConfigurationError)
+        try:
+            _cu_cfg = ComputerUseConfig.from_env()
+            app.state.computer_use_driver = ComputerUseDriverFactory.create(
+                provider=_cu_cfg.provider,
+                mode=_cu_cfg.mode,
+                config=_cu_cfg,
+            )
+            _structured_log.info("computer_use_init", extra={
+                "mode": _cu_cfg.mode, "provider": _cu_cfg.provider})
+        except ComputerUseConfigurationError as exc:
+            # Non-fatal: log and store a DisabledDriver so endpoints can
+            # report the misconfiguration cleanly instead of crashing.
+            from b2b_ai.computer_use.factory import DisabledDriver
+            app.state.computer_use_driver = DisabledDriver()
+            _structured_log.warning("computer_use_init_failed", extra={
+                "error": str(exc)})
+        except Exception as exc:  # noqa: BLE001
+            from b2b_ai.computer_use.factory import DisabledDriver
+            app.state.computer_use_driver = DisabledDriver()
+            _structured_log.warning("computer_use_init_unexpected", extra={
+                "error": str(exc)})
+
         # Graceful shutdown: register signal handlers and drain period.
         _shutdown_mgr = ShutdownManager()
         _shutdown_mgr.install_signal_handlers()
@@ -717,6 +743,37 @@ def create_app(db=None):
         componentes en falla se listan en `degraded_components`."""
         prom_metrics.set_tenant_usage(db.get_all_usage())
         return build_health_detailed(db, actual_backend="postgresql" if db._is_pg else "sqlite")
+
+    @app.get("/health/playwright")
+    async def health_playwright():
+        """Smoke test de Playwright + Chromium: lanza browser, abre página,
+        toma screenshot y cierra. Úsalo para verificar que Chromium está
+        instalado correctamente en el contenedor. No requiere API key."""
+        from b2b_ai.computer_use.smoke_test import run_smoke_test
+        result = await run_smoke_test()
+        status_code = 200 if result["ok"] else 503
+        from fastapi.responses import JSONResponse
+        return JSONResponse(content=result, status_code=status_code)
+
+    @app.get("/health/computer-use",
+             summary="Health del driver de Computer Use (ERP automation).",
+             tags=["health"])
+    async def health_computer_use():
+        """Devuelve el estado del driver de Computer Use configurado por
+        variables de entorno (provider, modo, credenciales). No requiere
+        API key."""
+        driver = getattr(app.state, "computer_use_driver", None)
+        if driver is None:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                content={"ok": False, "status": "not_initialized",
+                         "message": "Computer Use driver not initialized."},
+                status_code=503,
+            )
+        result = driver.health()
+        status_code = 200 if result.ok else 503
+        from fastapi.responses import JSONResponse
+        return JSONResponse(content=result.to_dict(), status_code=status_code)
 
     # ------------------------------------------------------------------ #
     # API v1 — protegida por API key
