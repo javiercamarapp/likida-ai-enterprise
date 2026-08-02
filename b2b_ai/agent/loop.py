@@ -34,6 +34,16 @@ from b2b_ai.services.timeouts import (
     TIMEOUT_SAT, TIMEOUT_LLM, TIMEOUT_ERP,
 )
 
+from b2b_ai.infrastructure.retry import with_retry, RetryConfig, SERVICE_RETRY_CONFIGS
+
+# AG-01: Retry config for tool calls (transient network/timeout errors)
+SERVICE_RETRY_CONFIGS["tool_call"] = RetryConfig(
+    max_attempts=3,
+    base_delay=1.0,
+    max_delay=15.0,
+    retryable_exceptions=(ConnectionError, TimeoutError, OSError),
+)
+
 from b2b_ai.db.db import Database
 from b2b_ai.db.tenants import TenantManager
 from b2b_ai.services.llm import LLMService
@@ -64,9 +74,15 @@ class AgentLoop:
         self.notify = notify
 
     # ---- herramientas con auditoría --------------------------------------
+    # AG-01: Retry wrapper for transient tool call failures
+    @staticmethod
+    @with_retry(service="tool_call")
+    def _call_tool_with_retry(name, **kwargs):
+        return call_tool(name, **kwargs)
+
     def _call(self, name, tenant_id, **kwargs):
         try:
-            res = call_tool(name, **kwargs)
+            res = self._call_tool_with_retry(name, **kwargs)
             self.logger.log(name, "agent_loop", entity="agent", entity_id=name,
                             payload=res, status="ok", tenant_id=tenant_id)
             return res
