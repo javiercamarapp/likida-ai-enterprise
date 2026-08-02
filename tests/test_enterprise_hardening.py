@@ -204,21 +204,29 @@ class TestRateLimitingEnterprise:
         """Test that exceeding rate limit returns 429 with proper structure."""
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
-        from b2b_ai.api.rate_limiter import _MemoryBackend
+        from b2b_ai.api.rate_limiter import EnterpriseRateLimitMiddleware
 
-        # Create a custom backend that always says limit exceeded
+        # Create a custom backend that always says limit exceeded.
+        # Use monkeypatch to ensure B2B_RATE_LIMIT is "on" for this test,
+        # regardless of module-level setdefault or sibling-test env pollution.
         class AlwaysExceededBackend:
             def check_and_consume(self, key, limit, window):
                 return 0, time.time() + window
+
             def get_usage(self, key, window):
-                return limit + 1
+                # Return a value that always exceeds any limit.
+                # NOTE: earlier version referenced `limit` from
+                # check_and_consume's scope which caused a NameError
+                # when the middleware was enabled in the full test suite.
+                return 999_999
+
             def reset(self, key=None):
                 pass
+
             @property
             def size(self):
                 return 0
 
-        from b2b_ai.api.rate_limiter import EnterpriseRateLimitMiddleware
         app = FastAPI()
         app.add_middleware(EnterpriseRateLimitMiddleware, backend=AlwaysExceededBackend())
 
@@ -227,10 +235,23 @@ class TestRateLimitingEnterprise:
             return {"ok": True}
 
         client = TestClient(app, raise_server_exceptions=False)
-        resp = client.get("/api/v1/test")
-        # Should get 429 or normal response depending on middleware behavior
-        # The key test is that the middleware doesn't crash
-        assert resp.status_code in (200, 429)
+        # Force the middleware enabled so the backend is actually exercised.
+        import b2b_ai.api.rate_limiter as _rl_mod
+        old_env = os.environ.get("B2B_RATE_LIMIT")
+        os.environ["B2B_RATE_LIMIT"] = "on"
+        try:
+            resp = client.get("/api/v1/test")
+            assert resp.status_code == 429, (
+                f"Expected 429 but got {resp.status_code}: {resp.text}"
+            )
+            body = resp.json()
+            assert "error" in body
+            assert body["error"]["code"] == 1429
+        finally:
+            if old_env is None:
+                os.environ.pop("B2B_RATE_LIMIT", None)
+            else:
+                os.environ["B2B_RATE_LIMIT"] = old_env
 
     def test_health_exempt_from_rate_limit(self):
         """Health endpoints should not be rate limited."""

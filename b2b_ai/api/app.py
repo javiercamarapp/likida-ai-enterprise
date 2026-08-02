@@ -534,6 +534,39 @@ def create_app(db=None):
             max_age=600,
         )
 
+    # ------------------------------------------------------------------ #
+    # Request size limit: reject payloads > 50 MB to prevent OOM.
+    # Skips health, metrics and static endpoints.
+    # ------------------------------------------------------------------ #
+    _MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50 MB
+    _SIZE_EXEMPT_PREFIXES = ("/health", "/metrics", "/static")
+
+    @app.middleware("http")
+    async def _request_size_limit_mw(request: Request, call_next):
+        path = request.url.path
+        if path.startswith(_SIZE_EXEMPT_PREFIXES):
+            return await call_next(request)
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > _MAX_CONTENT_LENGTH:
+                    from fastapi.responses import JSONResponse
+                    _structured_log.warning(
+                        "request_too_large",
+                        extra={"path": path, "content_length": content_length,
+                               "client": _client_ip(request)},
+                    )
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "detail": "Payload Too Large. "
+                                      f"Maximum allowed size is {_MAX_CONTENT_LENGTH} bytes (50 MB)."
+                        },
+                    )
+            except (ValueError, TypeError):
+                pass  # Malformed Content-Length; let downstream handle it
+        return await call_next(request)
+
     # Rate limiting (on por defecto; ajustable via env, `off` lo desactiva).
     _rl_raw = os.environ.get("B2B_RATE_LIMIT_PER_MIN", "300")
     try:
