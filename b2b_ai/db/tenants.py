@@ -129,10 +129,18 @@ class TenantManager:
         return row
 
     def _find_tenant(self, tenant_id: int) -> Optional[Dict[str, Any]]:
-        for t in self.db.list_tenants():
-            if t["id"] == tenant_id:
-                return t
-        return None
+        # DB-01: Point lookup by PK instead of full table scan
+        try:
+            row = self.db.conn.execute(
+                "SELECT * FROM tenants WHERE id=?", (tenant_id,)
+            ).fetchone()
+            return dict(row) if row else None
+        except Exception:
+            # Fallback for adapters without direct conn access
+            for t in self.db.list_tenants():
+                if t["id"] == tenant_id:
+                    return t
+            return None
 
     def exists(self, tenant_id: int) -> bool:
         return self._find_tenant(tenant_id) is not None
