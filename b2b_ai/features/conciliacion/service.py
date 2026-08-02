@@ -469,7 +469,7 @@ class ConciliationService(ManualProcessMixin):
                     seen_amounts[key] = []
                 seen_amounts[key].append(txn.id)
 
-            for (amount, date), ids in seen_amounts.items():
+            for (amount, date, _desc), ids in seen_amounts.items():
                 if len(ids) > 1:
                     discrepancies.append(Discrepancy(
                         id=f"DISC-DUP-{ids[0]}",

@@ -173,6 +173,20 @@ def build_conciliacion_router(
     ) -> dict:
         """Upload a bank statement CSV file. CSV should have columns:
         id, date, description, amount, type, reference, bank_account."""
+        # BUG-F23: Reject PDF files with a clear message
+        filename = (file.filename or "").lower()
+        content_type = (file.content_type or "").lower()
+        if filename.endswith(".pdf") or "pdf" in content_type:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Los estados de cuenta en PDF no son soportados actualmente. "
+                    "Exporte el estado de cuenta como CSV desde su banca en línea "
+                    "(BBVA, Banorte, HSBC ofrecen exportación CSV). "
+                    "Si solo tiene PDF, use una herramienta de extracción (tabula, "
+                    "pdfplumber) para convertirlo a CSV primero."
+                ),
+            )
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="Archivo vacío.")

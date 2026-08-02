@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from b2b_ai.cfdi import catalogs
 from typing import Any, Dict, List
+import threading
 
 KEYWORDS: Dict[str, List[str]] = {
     "nomina": ["nomina", "sueldo", "salario", "percepcion", "aguinaldo",
@@ -136,6 +137,64 @@ def main():
         sys.exit(1)
     datos = parse_cfdi(sys.argv[1])
     print(json.dumps(classify_cfdi(datos), indent=2, ensure_ascii=False))
+
+
+# ---------------------------------------------------------------------------
+# BUG-F25: Review queue for items needing human review
+# ---------------------------------------------------------------------------
+
+_review_queue: Dict[str, dict] = {}
+_review_lock = threading.Lock()
+
+
+def enqueue_for_review(
+    tenant_id: str,
+    cfdi_data: dict,
+    classification: dict,
+    reason: str = "",
+) -> str:
+    """Add a CFDI to the human review queue.
+
+    Called when classification is 'desconocido' or confidence < 0.70.
+    Returns the review item ID.
+    """
+    import uuid
+    item_id = f"REV-{uuid.uuid4().hex[:8]}"
+    with _review_lock:
+        _review_queue[item_id] = {
+            "id": item_id,
+            "tenant_id": tenant_id,
+            "emisor_rfc": cfdi_data.get("emisor_rfc", ""),
+            "folio_fiscal": cfdi_data.get("folio_fiscal", ""),
+            "total": str(cfdi_data.get("total", "")),
+            "descripcion": cfdi_data.get("descripcion", ""),
+            "categoria_sugerida": classification.get("categoria", "desconocido"),
+            "confianza": classification.get("confianza", 0),
+            "razon": classification.get("razon", ""),
+            "reason": reason,
+            "status": "pending",
+        }
+    return item_id
+
+
+def get_review_queue(tenant_id: str | None = None) -> List[dict]:
+    """Get pending review items, optionally filtered by tenant."""
+    with _review_lock:
+        items = list(_review_queue.values())
+    if tenant_id:
+        items = [i for i in items if i["tenant_id"] == tenant_id]
+    return [i for i in items if i["status"] == "pending"]
+
+
+def resolve_review(item_id: str, resolved_categoria: str, resolved_by: str = "system") -> bool:
+    """Mark a review item as resolved with the human-determined category."""
+    with _review_lock:
+        if item_id not in _review_queue:
+            return False
+        _review_queue[item_id]["status"] = "resolved"
+        _review_queue[item_id]["resolved_categoria"] = resolved_categoria
+        _review_queue[item_id]["resolved_by"] = resolved_by
+    return True
 
 
 if __name__ == "__main__":

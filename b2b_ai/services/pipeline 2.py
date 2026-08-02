@@ -107,16 +107,6 @@ def process_file(xml_path: str, db: "Database | None" = None, tenant_id: int | N
     # 3. Classify
     clasif = _tool("classify_expense", logger_, tenant_id, datos=datos)
 
-    # BUG-F25: Enqueue items classified as 'desconocido' for human review
-    if clasif.get("categoria") == "desconocido" or clasif.get("confianza", 1.0) < 0.70:
-        from b2b_ai.services.classify import enqueue_for_review
-        review_id = enqueue_for_review(
-            tenant_id=str(tenant_id),
-            cfdi_data=datos,
-            classification=clasif,
-            reason=f"Confianza baja ({clasif.get('confianza', 0)}) o categoría desconocida",
-        )
-
     # 3b. Anomaly detection (FASE 2) — después de clasificar
     invoice = dict(datos)
     invoice["categoria"] = clasif["categoria"]
