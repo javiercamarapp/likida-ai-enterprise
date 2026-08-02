@@ -291,8 +291,8 @@ class TestIsrAnual:
         )
 
         isr_data = decl.data
-        # Expected: 106293.69 + (500000 - 412946.07) * 0.34 = 106293.69 + 29598.34 = 135892.03
-        assert isr_data["isr_calculated"] == pytest.approx(135892.03, abs=0.01)
+        # 2025 annual table: 97257.13 + (500000 - 411081.47) * 0.32 = 97257.13 + 28453.93 = 125711.06
+        assert isr_data["isr_calculated"] == pytest.approx(125711.06, abs=0.01)
 
     def test_isr_anual_deadline(self, service):
         """ISR annual deadline is April 30th of following year."""
