@@ -317,6 +317,27 @@ class Database:
         self.conn.commit()
         return invoice_id, inserted
 
+    def update_invoice_erp_status(self, invoice_id: int, erp_res: dict) -> None:
+        """ER-01: Actualiza el erp_status de una factura después de registrar en ERP."""
+        now = datetime.now().isoformat(timespec="seconds")
+        erp_poliza = erp_res.get("poliza", "") if erp_res else ""
+        erp_status = erp_res.get("status", "") if erp_res else ""
+        # Derive overall status from erp_status
+        if erp_status == "pending_approval":
+            status = "pending_approval"
+        elif erp_status in ("rejected_invalid_cfdi", "erp_failed"):
+            status = "rejected"
+        elif erp_res and erp_res.get("ok"):
+            status = "procesado"
+        else:
+            status = "procesado"
+        self.conn.execute(
+            "UPDATE invoices SET erp_poliza=?, erp_status=?, status=?, procesado_en=? WHERE id=?",
+            (erp_poliza, erp_status, status, now, invoice_id),
+        )
+        self.conn.commit()
+        self._bump_version()
+
     def list_invoices(self, tenant_id=None, limit=None,
                       categoria=None, valido=None, fecha_desde=None,
                       fecha_hasta=None):

@@ -138,13 +138,22 @@ def process_file(xml_path: str, db: "Database | None" = None, tenant_id: int | N
     inv_id, inserted = db.insert_invoice(
         tenant_id, datos, clasif, validacion, erp=pending_erp)
 
-    # 5b. Registrar en ERP DESPUÉS de persistir en DB
-    if erp_res and erp_res.get("ok"):
+    # 5b. ER-01: Actualizar DB con resultado real del ERP
+    if inv_id and erp_res and erp_res.get("ok"):
         try:
-            # Update DB with actual ERP result
-            pass  # erp_res already computed above; update status below
+            db.update_invoice_erp_status(inv_id, erp_res)
         except Exception:
             erp_res = {"ok": False, "poliza": None, "status": "erp_failed"}
+            try:
+                db.update_invoice_erp_status(inv_id, erp_res)
+            except Exception:
+                pass  # best-effort; invoice stays as pending
+    elif inv_id and erp_res:
+        # Update with non-OK ERP result (pending_approval, rejected, etc.)
+        try:
+            db.update_invoice_erp_status(inv_id, erp_res)
+        except Exception:
+            pass
 
     # 6. Notificación (si aplica; no bloquea el pipeline)
     notif = {"status": "skipped"}
