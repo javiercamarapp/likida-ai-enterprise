@@ -220,8 +220,8 @@ class TestIsrProvisional:
         )
 
         isr_data = decl.data
-        # Expected: 8857.35 + (50000 - 34410.82) * 0.34 = 8857.35 + 5300.32 = 14157.67
-        assert isr_data["isr_calculated"] == pytest.approx(14157.67, abs=0.01)
+        # 2025 table: 11753.69 + (50000 - 45675.75) * 0.34 = 11753.69 + 1470.25 = 13223.94
+        assert isr_data["isr_calculated"] == pytest.approx(13223.94, abs=0.01)
 
     def test_isr_low_income(self, service):
         """ISR for low income falls in first bracket."""
