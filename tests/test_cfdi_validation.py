@@ -13,7 +13,8 @@ SAMPLE_CFDI = """<?xml version="1.0" encoding="UTF-8"?>
     Fecha="2026-07-03T10:00:00"
     FormaPago="03" MetodoPago="PUE" Moneda="MXN"
     TipoDeComprobante="I" Exportacion="01"
-    LugarExpedicion="06600" SubTotal="1000.00" Descuento="0.00" Total="1160.00">
+    LugarExpedicion="06600" SubTotal="1000.00" Descuento="0.00" Total="1160.00"
+    Sello="FAKESELLO1234" NoCertificado="00001000000000000000">
     <cfdi:Emisor Rfc="PAP850101JKL" Nombre="PAPELERIA TEST" RegimenFiscal="601"/>
     <cfdi:Receptor Rfc="XAXX010101000" Nombre="RECEPTOR TEST"
         DomicilioFiscalReceptor="06600" RegimenFiscalReceptor="603" UsoCFDI="G03"/>
@@ -70,6 +71,7 @@ INVALID_NO_SELLO = """<?xml version="1.0" encoding="UTF-8"?>
 # CFDI válido pero con RFC inválido → CON OBSERVACIONES
 OBS_CFDI_RFC_BAD = """<?xml version="1.0" encoding="UTF-8"?>
 <cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4"
+    xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital"
     Version="4.0" Serie="Y" Folio="200"
     Fecha="2026-07-03T10:00:00"
     FormaPago="03" MetodoPago="PUE" Moneda="MXN"
@@ -106,20 +108,15 @@ MALFORMED = """not xml at all <>&"""
 
 
 @pytest.fixture
-def client():
-    """FastAPI test client with API-key dependency overridden."""
+def client(tmp_path, monkeypatch):
+    """FastAPI test client using the real tenant-bound API-key dependency."""
     from b2b_ai.api.app import create_app
-    from b2b_ai.api.routes.cfdi_validation import _require_api_key
+    from b2b_ai.db.db import Database
 
-    app = create_app()
-
-    # Override the API-key dependency so tests can send "test-api-key"
-    async def _no_op_key() -> str:
-        return "test-api-key"
-
-    app.dependency_overrides[_require_api_key] = _no_op_key
+    monkeypatch.setenv("B2B_API_KEY", "test-api-key")
+    monkeypatch.setenv("B2B_DEFAULT_TENANT_ID", "1")
+    app = create_app(Database(str(tmp_path / "cfdi-validation.db")))
     yield TestClient(app)
-    app.dependency_overrides.clear()
 
 
 class TestValidateEndpoint:
@@ -232,8 +229,8 @@ class TestValidateEndpoint:
         # RFC emisor inválido → no es VALIDO
         assert data["status"] in ("INVALIDO", "CON_OBSERVACIONES")
         assert data["validacion"]["ok"] is False
-        assert any(e["code"] == "rfc_emisor_invalido"
-                   for e in data["validacion"]["errores_sat"])
+        assert any(w["code"] == "rfc_emisor_invalido"
+                   for w in data["validacion"]["advertencias_sat"])
 
     # ---- 400 — Body vacío ----
 

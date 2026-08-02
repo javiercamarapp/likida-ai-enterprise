@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 import uuid as _uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -41,10 +43,15 @@ from b2b_ai.features.document_management.storage import (
     get_backend,
 )
 
-# En memoria por defecto solo para backward-compat de los tests que no pasan
-# db. Con db=None usamos una base SQLite efímera (:memory:), aislada por
-# instancia del servicio — nunca toca la base real del repo.
+# SQLite uses one connection per worker thread.  A literal ``:memory:`` would
+# therefore create a different database for an async upload and a sync read in
+# FastAPI's threadpool.  Use one process-local temporary file so all worker
+# connections see the same ephemeral data without touching the real database.
 _DEFAULT_DB = None
+_DEFAULT_DB_FD, _DEFAULT_DB_PATH = tempfile.mkstemp(
+    prefix=f"likida-documents-{os.getpid()}-", suffix=".db"
+)
+os.close(_DEFAULT_DB_FD)
 
 
 def _reset_state() -> None:
@@ -166,7 +173,7 @@ class DocumentService:
             self.db = db
         else:
             if _DEFAULT_DB is None:
-                _DEFAULT_DB = Database(":memory:", migrate=False)
+                _DEFAULT_DB = Database(_DEFAULT_DB_PATH, migrate=False)
             self.db = _DEFAULT_DB
         _ensure_schema(self.db)
         if storage is not None:

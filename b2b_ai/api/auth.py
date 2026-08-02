@@ -18,6 +18,7 @@ Auth flow (multi-tenant + standalone):
 """
 from __future__ import annotations
 
+import hmac
 import os
 from typing import Any, Dict, Optional
 
@@ -63,20 +64,28 @@ class APIKeyAuth:
         """Return True if the key is valid."""
         if not key:
             return False
-        # Standalone mode: single key from env
-        if self._env_key:
-            return key == self._env_key
-        # Multi-tenant mode: check DB
+        # The service key and tenant keys coexist.  Previously, merely setting
+        # B2B_API_KEY disabled every DB-backed key because the env key was the
+        # only one considered here.
+        if self.is_service_key(key):
+            return True
         if self.db is not None:
             return self._lookup(key) is not None
-        # Fallback: allow any non-empty key in dev
-        return bool(key)
+        return False
+
+    def is_service_key(self, key: str) -> bool:
+        """Return whether *key* is the configured global service key."""
+        return bool(
+            key
+            and self._env_key
+            and hmac.compare_digest(key, self._env_key)
+        )
 
     def get_tenant_id(self, key: str) -> Optional[str]:
         """Return tenant_id for the given key (multi-tenant mode only)."""
         # Standalone env key has no DB tenant; the env fallback applies
         # (resolve_tenant_from_env) at the dependency level.
-        if self._env_key:
+        if self.is_service_key(key):
             return None
         if self.db is None:
             return None
@@ -110,11 +119,12 @@ class APIKeyAuth:
             "tenant_id": tenant_id,
             "user_id": self.get_user_id(key),
             "name": key,
-            "source": "env" if self._env_key else "db",
+            "source": "env" if self.is_service_key(key) else "db",
+            "is_service": self.is_service_key(key),
         }
 
 
-def make_require_api_key(auth: APIKeyAuth):
+def make_require_api_key(auth: APIKeyAuth, *, allow_service: bool = False):
     """Build a FastAPI Depends() function for API-key auth.
 
     Returns a dict context:
@@ -140,7 +150,11 @@ def make_require_api_key(auth: APIKeyAuth):
         if tenant_id is None:
             tenant_id = resolve_tenant_from_env()
 
-        if tenant_id is None:
+        is_service = bool(
+            getattr(auth, "is_service_key", lambda _key: False)(key)
+        )
+
+        if tenant_id is None and not (allow_service and is_service):
             # Multi-tenant isolation: never silently run as a shared tenant.
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -153,6 +167,7 @@ def make_require_api_key(auth: APIKeyAuth):
             "key": key,
             "tenant_id": tenant_id,
             "user_id": auth.get_user_id(key),
+            "is_service": is_service,
         }
 
     return _require

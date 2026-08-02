@@ -9,22 +9,34 @@ from lxml import etree
 class TestSafeParser:
     """Verify safe_parser() hardening options."""
 
-    def test_safe_parser_disables_entities(self):
-        from b2b_ai.cfdi.xml_security import safe_parser
-        parser = safe_parser()
-        # resolve_entities=False prevents XXE
-        assert parser._parser.resolve_entities is False
+    @staticmethod
+    def _parser_options(monkeypatch):
+        """Capture constructor flags without relying on lxml private attributes."""
+        from b2b_ai.cfdi import xml_security
 
-    def test_safe_parser_no_network(self):
-        from b2b_ai.cfdi.xml_security import safe_parser
-        parser = safe_parser()
-        assert parser._parser.network_access is False
+        options = {}
+        sentinel = object()
 
-    def test_safe_parser_no_dtd(self):
-        from b2b_ai.cfdi.xml_security import safe_parser
-        parser = safe_parser()
-        assert parser._parser.dtd_validation is False
-        assert parser._parser.load_dtd is False
+        def capture_parser(**kwargs):
+            options.update(kwargs)
+            return sentinel
+
+        monkeypatch.setattr(xml_security.etree, "XMLParser", capture_parser)
+        assert xml_security.safe_parser() is sentinel
+        return options
+
+    def test_safe_parser_disables_entities(self, monkeypatch):
+        options = self._parser_options(monkeypatch)
+        assert options["resolve_entities"] is False
+
+    def test_safe_parser_no_network(self, monkeypatch):
+        options = self._parser_options(monkeypatch)
+        assert options["no_network"] is True
+
+    def test_safe_parser_no_dtd(self, monkeypatch):
+        options = self._parser_options(monkeypatch)
+        assert options["dtd_validation"] is False
+        assert options["load_dtd"] is False
 
 
 class TestSafeFromString:

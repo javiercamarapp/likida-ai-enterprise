@@ -39,8 +39,21 @@ class FakeDB:
 
     def insert_invoice(self, tenant_id, datos, clasif, validacion, erp=None):
         inv_id = len(self._invoices) + 1
-        self._invoices.append({"id": inv_id, "tenant_id": tenant_id})
+        self._invoices.append({
+            "id": inv_id, "tenant_id": tenant_id,
+            "erp_poliza": (erp or {}).get("poliza"),
+            "erp_status": (erp or {}).get("status"),
+        })
         return inv_id, True
+
+    def update_invoice_erp(self, invoice_id, tenant_id, erp):
+        invoice = next(
+            i for i in self._invoices
+            if i["id"] == invoice_id and i["tenant_id"] == tenant_id
+        )
+        invoice["erp_poliza"] = erp.get("poliza")
+        invoice["erp_status"] = erp.get("status")
+        return True
 
     def list_invoices(self, tenant_id=None, limit=200):
         return [i for i in self._invoices if tenant_id is None or i.get("tenant_id") == tenant_id][:limit]

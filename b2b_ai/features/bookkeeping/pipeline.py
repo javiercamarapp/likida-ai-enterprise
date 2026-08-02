@@ -213,7 +213,7 @@ class PipelineOrchestrator:
                     job.job_id, len(needs_override))
 
             # Stage 3: Register in ERP
-            if auto_register_erp and polizas:
+            if auto_register_erp and polizas and not needs_override:
                 job.stage = PipelineStage.REGISTERING_ERP
                 job.progress_pct = 50.0
                 erp_results = self._erp.register_batch(polizas)

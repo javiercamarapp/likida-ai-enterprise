@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 """Tests del validador fiscal avanzado."""
+from pathlib import Path
+
 import pytest
 
 from b2b_ai.cfdi.parser import parse_cfdi
 from b2b_ai.cfdi.validator import validate_cfdi
 from b2b_ai.cfdi import catalogs
+
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "cfdis"
 
 
 def test_validar_consultoria(parsed_consultoria):
@@ -29,8 +34,7 @@ def test_validar_honorarios(sample_honorarios):
 def test_importe_concepto_incoherente(tmp_path):
     # Cargar un XML válido y romper el importe de un concepto
     import shutil
-    from conftest import fixture_path
-    src = fixture_path("02_inversion_consultoria.xml")
+    src = FIXTURES / "02_inversion_consultoria.xml"
     f = tmp_path / "roto.xml"
     shutil.copy(src, f)
     text = f.read_text()
@@ -45,8 +49,7 @@ def test_importe_concepto_incoherente(tmp_path):
 
 def test_uso_cfdi_invalido(tmp_path):
     import shutil
-    from conftest import fixture_path
-    src = fixture_path("02_inversion_consultoria.xml")
+    src = FIXTURES / "02_inversion_consultoria.xml"
     f = tmp_path / "uso.xml"
     shutil.copy(src, f)
     text = f.read_text().replace('UsoCFDI="G03"', 'UsoCFDI="ZZ99"')

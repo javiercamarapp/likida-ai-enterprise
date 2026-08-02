@@ -173,7 +173,7 @@ class TestConektaClient:
 
 class TestWebhookSignature:
     def test_verify_valid_signature(self):
-        secret = "test_webhook_secret_123"
+        secret = "mock_webhook_secret_123"
         c = ConektaClient(mock=True, webhook_secret=secret)
         payload = {"event": "charge.paid"}
         header = _valid_webhook_header(secret, payload)
@@ -182,7 +182,7 @@ class TestWebhookSignature:
         assert c.verify_webhook_signature(raw, header) is True
 
     def test_verify_invalid_signature(self):
-        secret = "test_webhook_secret_123"
+        secret = "mock_webhook_secret_123"
         c = ConektaClient(mock=True, webhook_secret=secret)
         assert c.verify_webhook_signature("payload", "hmac_sha256=0" * 10) is False
 

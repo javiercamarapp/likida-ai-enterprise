@@ -161,7 +161,10 @@ class SATSubmitter:
 
         # In test mode, simulate acceptance
         if self._test_mode:
-            folio = f"SIM-{hashlib.md5(xml_signed).hexdigest()[:12].upper()}"
+            digest = hashlib.md5(  # nosec B324 - deterministic test-mode folio
+                xml_signed, usedforsecurity=False
+            ).hexdigest()
+            folio = f"SIM-{digest[:12].upper()}"
             result = SubmissionResult(
                 status=SubmissionStatus.ACCEPTED,
                 folio=folio,

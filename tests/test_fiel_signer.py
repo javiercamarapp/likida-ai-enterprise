@@ -27,8 +27,11 @@ class TestFIELSigner:
             rfc="TESTRFC010101",
         )
 
-        mock_key = MagicMock()
-        mock_key.sign.return_value = b"\x00" * 256  # 256-byte RSA signature
+        # Exercise the production crypto path.  A MagicMock is intentionally
+        # rejected by FIELSigner so an arbitrary object cannot impersonate a
+        # signing key.
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        mock_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
         signer = FIELSigner(
             certificate=b"mock_cert_bytes",

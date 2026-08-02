@@ -33,13 +33,13 @@ from b2b_ai.notifications.templates import (
 # Fixtures y helpers
 # ====================================================================== #
 @pytest.fixture
-def provider():
+def provider(_clean_env):
     """Proveedor sin SMTP configurado (modo simulado)."""
     return AsyncSMTPProvider()
 
 
 @pytest.fixture
-def configured_provider():
+def configured_provider(_clean_env):
     """Proveedor con credenciales SMTP (mock, sin red real)."""
     return AsyncSMTPProvider(
         host="smtp.test.com",
@@ -555,7 +555,7 @@ class TestEnvVarsDualSupport:
     def test_smtp_from_default(self):
         """Default from_addr correcto."""
         p = AsyncSMTPProvider()
-        assert p.from_addr == "agente@b2b-ai.local"
+        assert p.from_addr == "agente@likida.ai"
 
     def test_smtp_port_default(self):
         """Default port es 465."""

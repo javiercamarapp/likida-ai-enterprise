@@ -228,6 +228,23 @@ class AspelRealDriver(DesktopAutomation):
             if not submitted:
                 await self.desktop.press_key("Enter")
 
+            await self._safe_wait(0.5)
+            authenticated = False
+            for sel in ("#dashboard-title", "#main-nav", ".dashboard",
+                        "nav", "a:has-text('Facturas')"):
+                found = await self.desktop.find_elements(sel)
+                if found.get("ok") and found.get("count", 0) > 0:
+                    authenticated = True
+                    break
+            if not authenticated:
+                content = await self.desktop.get_content()
+                return {
+                    "ok": False,
+                    "session": None,
+                    "message": "Login enviado, pero no se pudo verificar una sesión autenticada.",
+                    "page_url": content.get("url"),
+                }
+
             self.session = {
                 "usuario": usuario,
                 "login_at": datetime.now().isoformat(timespec="seconds"),
@@ -276,9 +293,8 @@ class AspelRealDriver(DesktopAutomation):
                     return {"ok": True, "module": module,
                             "message": f"Módulo {module} abierto."}
 
-            self._current_module = module
-            return {"ok": True, "module": module,
-                    "message": f"Módulo {module} abierto (fallback)."}
+            return {"ok": False, "module": module,
+                    "message": f"No se encontró el acceso al módulo {module}."}
 
         except Exception as e:
             logger.error("AspelRealDriver: navigate_menu FAILED module=%s error=%s",
@@ -442,22 +458,26 @@ class AspelRealDriver(DesktopAutomation):
                 ("input[name='folioFiscal']", folio),
                 ("input[name='folio']", folio),
                 ("input[id='txtFolio']", folio),
+                ("#folio-input", folio),
             ])
             if not folio_sel:
                 logger.warning(
                     "Aspel: no se encontró campo folio; registro pendiente.")
                 registro = self._build_pending_record(data, folio)
+                registro["status"] = "error_captura"
                 self._registered.append(registro)
-                return {"ok": True, "registro": registro,
-                        "message": f"CFDI {folio} registrado (sin campo folio)."}
+                return {"ok": False, "registro": registro,
+                        "message": f"No se encontró el campo folio para {folio}."}
 
             await self._fill_any(data, [
                 ("input[name='rfcEmisor']", data.get("emisor_rfc", "")),
                 ("input[name='rfc']", data.get("emisor_rfc", "")),
+                ("#emisor-input", data.get("emisor_rfc", "")),
             ])
             await self._fill_any(data, [
                 ("input[name='total']", str(data.get("total", ""))),
                 ("input[id='txtTotal']", str(data.get("total", ""))),
+                ("#total-input", str(data.get("total", ""))),
             ])
             await self._fill_any(data, [
                 ("textarea[name='concepto']", data.get("concepto", "")),
@@ -467,11 +487,14 @@ class AspelRealDriver(DesktopAutomation):
             # 3) Guardar
             saved = False
             for sel in ("button:has-text('Guardar')", "button#btnGuardar",
-                        "input[type='submit']", "button:has-text('Aceptar')"):
+                        "#register-submit", "input[type='submit']",
+                        "button:has-text('Aceptar')"):
                 res = await self.desktop.click_selector(sel)
                 if res.get("ok", False):
                     saved = True
                     break
+            if saved:
+                await self._safe_wait(0.5)
 
             # 4) Verificar en grid
             grid_ok = False
@@ -498,11 +521,15 @@ class AspelRealDriver(DesktopAutomation):
             logger.info(
                 "AspelRealDriver: register_invoice %s saved=%s grid=%s",
                 folio, saved, grid_ok)
+            verified = saved and grid_ok
             return {
-                "ok": True,
+                "ok": verified,
                 "registro": registro,
-                "message": (f"CFDI {folio} guardado en Aspel."
-                            if saved else f"CFDI {folio} capturado (pendiente verificación)."),
+                "message": (
+                    f"CFDI {folio} guardado y verificado en Aspel."
+                    if verified else
+                    f"CFDI {folio} no pudo confirmarse en Aspel; requiere revisión."
+                ),
             }
         except Exception as e:
             logger.error("AspelRealDriver: register_invoice error: %s", e)
@@ -602,3 +629,23 @@ class AspelRealDriver(DesktopAutomation):
 
     def press_key(self, key: str) -> dict:
         return self._run_sync(self.desktop.press_key(key))
+
+
+_AsyncAspelBrowser = AspelRealDriver
+
+from b2b_ai.computer_use.driver_adapter import AsyncPlaywrightDriverAdapter
+
+
+class AspelRealDriver(AsyncPlaywrightDriverAdapter):
+    """Canonical Aspel Playwright driver."""
+
+    def __init__(self, erp_url: Optional[str] = None, headless: bool = True,
+                 **_kwargs):
+        super().__init__(
+            _AsyncAspelBrowser(erp_url=erp_url, headless=headless),
+            provider="aspel",
+        )
+
+    @property
+    def desktop(self):
+        return self._legacy.desktop

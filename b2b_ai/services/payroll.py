@@ -630,9 +630,24 @@ def generate_payroll_cfdi(empleado, emisor, periodo, resultados=None,
     """
     import xml.sax.saxutils as sx
 
-    res = resultados or calculate_payroll(
-        empleado, periodo.get("sueldo_bruto", 0),
-        dias_pagados=periodo.get("dias_pagados"))
+    if resultados is None:
+        payroll_employee = dict(empleado)
+        if _dec(payroll_employee.get("salario_diario")) <= 0:
+            dias = int(periodo.get("dias_pagados") or 0)
+            sueldo = _dec(periodo.get("sueldo_bruto"))
+            if dias <= 0 or sueldo <= 0:
+                raise ValueError(
+                    "salario_diario or a positive sueldo_bruto/dias_pagados "
+                    "pair is required to calculate payroll"
+                )
+            payroll_employee["salario_diario"] = _round2(sueldo / dias)
+        res = calculate_payroll(
+            payroll_employee,
+            periodo.get("sueldo_bruto", 0),
+            dias_pagados=periodo.get("dias_pagados"),
+        )
+    else:
+        res = resultados
     d = res
     total = _dec(d["percepciones"]["total"])
     total_ded = _dec(d["total_deducciones"])

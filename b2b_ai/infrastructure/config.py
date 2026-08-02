@@ -267,6 +267,11 @@ class Settings(BaseModel):
             ... etc.
         """
         env = env_override or os.environ.get("B2B_ENV", "development")
+        env = {
+            "dev": "development",
+            "test": "testing",
+            "prod": "production",
+        }.get(env.lower(), env.lower())
 
         settings_data: Dict[str, Any] = {
             "env": env,

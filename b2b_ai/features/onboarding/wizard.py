@@ -414,10 +414,12 @@ class OnboardingWizard:
     def complete(self, session_id: str) -> Dict[str, Any]:
         """Cierra el onboarding: corre el health check y completa."""
         session = self.get_session(session_id)
-        if session.progress < 4:
+        # Payment/plan selection is a mandatory gate.  The previous threshold
+        # (progress < 4) let a session complete immediately after the test CFDI
+        # and silently skipped checkout.
+        if OnboardingStep.CHECKOUT.value not in session.completed_steps:
             raise OnboardingWizardError(
-                f"No se puede completar: faltan pasos "
-                f"({session.current_step or 'health_check'}). "
+                "No se puede completar: falta el paso checkout. "
                 f"Progreso {session.progress}/6."
             )
         # El paso final (health_check) se ejecuta como parte del cierre si no se

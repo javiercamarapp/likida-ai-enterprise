@@ -1,5 +1,10 @@
 /* landing.js — Landing page interactions (extracted from inline <script> for CSP nonce compliance) */
 
+// ─── PWA ───
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js'));
+}
+
 // ─── Scroll Reveal ───
 const revealEls = document.querySelectorAll('.reveal');
 const revealObserver = new IntersectionObserver((entries) => {

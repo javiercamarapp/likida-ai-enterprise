@@ -283,13 +283,25 @@ class _ComputerUseERPAdapter(ERPInterface):
         except RuntimeError:
             return asyncio.run(coro)
 
+    def _call_driver(self, method, *args):
+        """Call either the canonical sync driver or a legacy async method."""
+        import inspect
+        result = method(*args)
+        if inspect.isawaitable(result):
+            return self._run_async(result)
+        return result
+
+    @staticmethod
+    def _result_dict(result) -> dict:
+        return result.to_dict() if hasattr(result, "to_dict") else result
+
     def _ensure_session(self) -> None:
         """Ensure the driver is connected and authenticated before any op."""
         if self._session_ready:
             return
 
         # connect()
-        conn = self._run_async(self._driver.connect())
+        conn = self._result_dict(self._call_driver(self._driver.connect))
         if not (isinstance(conn, dict) and conn.get("ok", False)):
             raise RuntimeError(
                 "Computer Use: connect() failed — "
@@ -301,7 +313,9 @@ class _ComputerUseERPAdapter(ERPInterface):
                 "Computer Use: no credentials provided for login(). "
                 "Configure CONTPAQI_USERNAME/CONTPAQI_PASSWORD "
                 "or ASPEL_USERNAME/ASPEL_PASSWORD.")
-        login = self._run_async(self._driver.login(self._credentials))
+        login = self._result_dict(
+            self._call_driver(self._driver.login, self._credentials)
+        )
         if not (isinstance(login, dict) and login.get("ok", False)):
             raise RuntimeError(
                 "Computer Use: login() failed — "
@@ -312,18 +326,28 @@ class _ComputerUseERPAdapter(ERPInterface):
     def register_invoice(self, invoice: dict) -> dict:
         # Ensure authenticated session before registering (never silent)
         self._ensure_session()
-        result = self._run_async(self._driver.register_invoice(invoice))
-        return result.to_dict() if hasattr(result, "to_dict") else result
+        result = self._call_driver(self._driver.register_invoice, invoice)
+        return self._result_dict(result)
 
     def get_invoice(self, folio_fiscal: str) -> dict | None:
         self._ensure_session()
         verify = getattr(self._driver, "verify_invoice_registered", None)
         if verify is not None:
-            result = self._run_async(verify(folio_fiscal))
-            return result.to_dict() if hasattr(result, "to_dict") else result
+            result = self._result_dict(
+                self._call_driver(verify, folio_fiscal)
+            )
+            if not isinstance(result, dict) or not result.get("ok", False):
+                return None
+            evidence = result.get("data") or {}
+            return {
+                "folio_fiscal": evidence.get("folio_fiscal", folio_fiscal),
+                "verification": evidence,
+            }
         # Fallback: extract grid and search for the folio
         try:
-            grid = self._run_async(self._driver.extract_invoices())
+            grid = self._call_driver(self._driver.extract_invoices)
+            if hasattr(grid, "data"):
+                grid = grid.data.get("invoices", [])
             for inv in grid:
                 if str(inv.get("folio") or inv.get("folio_fiscal") or "") == str(folio_fiscal):
                     return inv

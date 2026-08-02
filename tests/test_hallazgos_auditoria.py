@@ -22,6 +22,7 @@ KEY = "clave-de-servicio-para-las-pruebas"
 @pytest.fixture
 def app_db(tmp_path, monkeypatch):
     monkeypatch.setenv("B2B_API_KEY", KEY)
+    monkeypatch.setenv("B2B_DEFAULT_TENANT_ID", "1")
     monkeypatch.setenv("B2B_RATE_LIMIT", "off")
     db = Database(str(tmp_path / "hallazgos.db"))
     return TestClient(create_app(db=db)), db
@@ -187,6 +188,7 @@ def test_conciliacion_sobrevive_a_una_instancia_nueva(tmp_path, monkeypatch):
     las pruebas veía el estado de la anterior).
     """
     monkeypatch.setenv("B2B_API_KEY", KEY)
+    monkeypatch.setenv("B2B_DEFAULT_TENANT_ID", "1")
     monkeypatch.setenv("B2B_RATE_LIMIT", "off")
     ruta = str(tmp_path / "conc.db")
 
@@ -204,6 +206,7 @@ def test_conciliacion_no_se_filtra_entre_instancias_sin_datos(tmp_path,
                                                               monkeypatch):
     """Una base recién creada no ve movimientos de ninguna corrida previa."""
     monkeypatch.setenv("B2B_API_KEY", KEY)
+    monkeypatch.setenv("B2B_DEFAULT_TENANT_ID", "1")
     monkeypatch.setenv("B2B_RATE_LIMIT", "off")
 
     primera = TestClient(create_app(db=Database(str(tmp_path / "a.db"))))

@@ -135,11 +135,12 @@ def process_file(xml_path: str, db: "Database | None" = None, tenant_id: int | N
                       "threshold": 0, "requires_approval": True,
                       "requires_efirma": True,
                       "reason": f"Confianza {clasif['confianza']} < {_CONFIDENCE_FLOOR}: gate duro."}
+    should_register_erp = False
     if not validacion.get("ok"):
         erp_res = {"ok": False, "poliza": None, "status": "rejected_invalid_cfdi"}
     elif aprobacion["decision"] in ("auto_approved", "approved"):
-        erp_res = _tool("register_erp", logger_, tenant_id,
-                        invoice=invoice, erp=erp)
+        should_register_erp = True
+        erp_res = {"ok": False, "poliza": None, "status": "pending"}
     else:
         erp_res = {
             "ok": False, "poliza": None, "status": "pending_approval",
@@ -148,19 +149,29 @@ def process_file(xml_path: str, db: "Database | None" = None, tenant_id: int | N
             "decision": aprobacion["decision"],
         }
 
-    # 5. AG-2: Persistir en DB PRIMERO (con erp_status=pending si se va a registrar)
-    # Esto previene pólizas fantasma en ERP si DB falla después.
-    pending_erp = {"ok": False, "poliza": None, "status": "pending"}
+    # 5. Persist first.  The external ERP side effect only happens after the
+    # invoice row exists, preventing orphan pólizas when DB persistence fails.
     inv_id, inserted = db.insert_invoice(
-        tenant_id, datos, clasif, validacion, erp=pending_erp)
+        tenant_id, datos, clasif, validacion, erp=erp_res)
 
-    # 5b. Registrar en ERP DESPUÉS de persistir en DB
-    if erp_res and erp_res.get("ok"):
+    # 5b. Register exactly once, after persistence.  A duplicate CFDI reuses
+    # the existing ERP evidence instead of creating another póliza.
+    if should_register_erp and inserted:
         try:
-            # Update DB with actual ERP result
-            pass  # erp_res already computed above; update status below
-        except Exception:
+            erp_res = _tool("register_erp", logger_, tenant_id,
+                            invoice=invoice, erp=erp)
+        except Exception as exc:
             erp_res = {"ok": False, "poliza": None, "status": "erp_failed"}
+            erp_res["error"] = str(exc)
+        db.update_invoice_erp(inv_id, tenant_id, erp_res)
+    elif should_register_erp and not inserted:
+        existing = db.get_invoice(inv_id, tenant_id=tenant_id) or {}
+        erp_res = {
+            "ok": bool(existing.get("erp_poliza")),
+            "poliza": existing.get("erp_poliza"),
+            "status": existing.get("erp_status") or "duplicate_existing",
+            "duplicate": True,
+        }
 
     # 6. Notificación (si aplica; no bloquea el pipeline)
     notif = {"status": "skipped"}

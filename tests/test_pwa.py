@@ -86,7 +86,7 @@ def test_landing_pwa_meta(tmp_path):
     c = _client(tmp_path)
     body = c.get("/").text
     assert 'rel="manifest"' in body
-    assert "sw.js" in body
+    assert "/static/landing.js" in body
     assert 'rel="apple-touch-icon"' in body
     assert 'name="theme-color"' in body
 
@@ -114,9 +114,8 @@ def test_icons_non_png_rejected(tmp_path):
 
 def test_landing_sw_registration_script(tmp_path):
     """La landing debe registrar el SW (script de carga)."""
-    c = _client(tmp_path)
-    body = c.get("/").text
-    assert "navigator.serviceWorker.register" in body
+    script = (LANDING_DIR / "landing.js").read_text()
+    assert "navigator.serviceWorker.register" in script
 
 
 def test_pwa_files_exist_on_disk():

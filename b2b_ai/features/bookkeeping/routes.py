@@ -84,9 +84,20 @@ def build_bookkeeping_router(
         tags=["bookkeeping"],
     )
 
-    # SECURITY: Require API key on ALL bookkeeping endpoints.
-    if require_api_key is not None:
-        router.dependencies.append(Depends(require_api_key))
+    # SECURITY: Require API key on ALL bookkeeping endpoints.  Keep a
+    # rejecting dependency for direct/unit construction without app wiring.
+    if require_api_key is None:
+        async def _reject_missing_auth():
+            raise HTTPException(401, "Authentication dependency not configured")
+        auth_dep = _reject_missing_auth
+    else:
+        auth_dep = require_api_key
+
+    def _authenticated_tenant(auth_info: dict) -> str:
+        tenant_id = str((auth_info or {}).get("tenant_id") or "").strip()
+        if not tenant_id:
+            raise HTTPException(422, "Este endpoint requiere una API key de tenant.")
+        return tenant_id
 
     # Shared components (in production, inject via DI)
     classifier = AutoClassifier()
@@ -116,7 +127,10 @@ def build_bookkeeping_router(
         "/process",
         summary="Process CFDIs through the bookkeeping pipeline",
     )
-    async def process_cfdis(request: ProcessRequest):
+    async def process_cfdis(
+        request: ProcessRequest,
+        auth_info: dict = Depends(auth_dep),
+    ):
         """Process a batch of CFDIs through the full bookkeeping pipeline:
         CFDI → classification → journal entry → ERP registration.
 
@@ -127,7 +141,7 @@ def build_bookkeeping_router(
 
         job = orchestrator.process_cfdis(
             cfdis=request.cfdis,
-            tenant_id=request.tenant_id,
+            tenant_id=_authenticated_tenant(auth_info),
             periodo=request.periodo,
             fecha=request.fecha,
             auto_register_erp=request.auto_register_erp,
@@ -154,13 +168,15 @@ def build_bookkeeping_router(
     async def get_status(
         tenant_id: str = Query(default="", description="Filter by tenant"),
         job_id: Optional[str] = Query(default=None, description="Specific job ID"),
+        auth_info: dict = Depends(auth_dep),
     ):
         """Get pipeline status. If job_id is provided, returns that job's
         details. Otherwise returns overall pipeline status.
         """
+        authenticated_tenant = _authenticated_tenant(auth_info)
         if job_id:
             job = orchestrator.get_job(job_id)
-            if not job:
+            if not job or job.tenant_id != authenticated_tenant:
                 raise HTTPException(404, f"Job {job_id} not found")
             return {
                 "job_id": job.job_id,
@@ -175,7 +191,7 @@ def build_bookkeeping_router(
                 "completed_at": job.completed_at.isoformat() if job.completed_at else None,
             }
 
-        return orchestrator.get_pipeline_status(tenant_id)
+        return orchestrator.get_pipeline_status(authenticated_tenant)
 
     # -----------------------------------------------------------------------
     # POST /bookkeeping/override
@@ -184,7 +200,10 @@ def build_bookkeeping_router(
         "/override",
         summary="Submit a human override for a CFDI classification",
     )
-    async def submit_override(request: OverrideRequest):
+    async def submit_override(
+        request: OverrideRequest,
+        auth_info: dict = Depends(auth_dep),
+    ):
         """Allow a human accountant to correct the agent's classification.
 
         The agent learns from feedback: repeated corrections for the same
@@ -198,9 +217,9 @@ def build_bookkeeping_router(
             new_cuenta_abono=request.new_cuenta_abono,
             original_categoria=request.original_categoria,
             reason=request.reason,
-            corrected_by=request.corrected_by,
+            corrected_by=request.corrected_by or str(auth_info.get("user_id") or ""),
             rfc_emisor=request.rfc_emisor,
-            tenant_id=request.tenant_id,
+            tenant_id=_authenticated_tenant(auth_info),
         )
 
         # Learn from the override
@@ -225,11 +244,14 @@ def build_bookkeeping_router(
     )
     async def get_suggestions(
         tenant_id: str = Query(default="", description="Filter by tenant"),
+        auth_info: dict = Depends(auth_dep),
     ):
         """Get CFDIs that the agent couldn't classify with high confidence,
         along with alternative suggestions.
         """
-        suggestions = orchestrator.get_suggestions(tenant_id)
+        suggestions = orchestrator.get_suggestions(
+            _authenticated_tenant(auth_info)
+        )
         # Also include RFC-level feedback suggestions
         retraining_suggestions = overrides.get_suggestions_for_retraining()
 
@@ -237,39 +259,6 @@ def build_bookkeeping_router(
             "pending_review": [s.model_dump() for s in suggestions],
             "retraining_suggestions": retraining_suggestions,
             "total_pending": len(suggestions),
-        }
-
-    # -----------------------------------------------------------------------
-    # POST /api/v1/pipeline/run  (alias retrocompatible del pipeline)
-    # -----------------------------------------------------------------------
-    @router.post(
-        "/pipeline/run",
-        summary="Ejecutar el pipeline de contabilidad (alias de /process)",
-        deprecated=False,
-    )
-    async def pipeline_run(request: ProcessRequest):
-        """Alias de `/api/v1/bookkeeping/process` para retrocompatibilidad.
-
-        Ejecuta el pipeline completo: CFDI → clasificación → póliza → ERP.
-        """
-        if not request.cfdis:
-            raise HTTPException(400, "At least one CFDI is required")
-        job = orchestrator.process_cfdis(
-            cfdis=request.cfdis,
-            tenant_id=request.tenant_id,
-            periodo=request.periodo,
-            fecha=request.fecha,
-            auto_register_erp=request.auto_register_erp,
-        )
-        return {
-            "job_id": job.job_id,
-            "stage": job.stage.value,
-            "progress_pct": job.progress_pct,
-            "classifications": [c.model_dump() for c in job.classifications],
-            "polizas": [p.model_dump() for p in job.polizas],
-            "erp_references": job.erp_references,
-            "overrides_needed": job.overrides_needed,
-            "errors": job.errors,
         }
 
     return router

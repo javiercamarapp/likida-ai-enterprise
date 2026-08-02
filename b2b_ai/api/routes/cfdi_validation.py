@@ -2,11 +2,11 @@
 """POST /api/v1/cfdi/validate — CFDI 4.0 upload, parse & compliance check."""
 from __future__ import annotations
 
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ValidationError, field_validator
 
 from b2b_ai.cfdi.parser import CFDIError, parse_cfdi_4
 from b2b_ai.cfdi.validator import SATError, check_cfdi_compliance
@@ -124,13 +124,14 @@ class CFDIValidationResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _status_from_checks(errors: list[SATError]) -> str:
-    if not errors:
-        return "VALIDO"
-    critical = [e for e in errors if e.severity == "error"]
-    if critical:
+def _status_from_checks(
+    errors: list[SATError], warnings: list[SATError]
+) -> str:
+    if errors:
         return "INVALIDO"
-    return "CON_OBSERVACIONES"
+    if warnings:
+        return "CON_OBSERVACIONES"
+    return "VALIDO"
 
 
 def _build_response(
@@ -138,7 +139,7 @@ def _build_response(
     errors: list[SATError],
     warnings: list[SATError],
 ) -> dict:
-    status = _status_from_checks(errors)
+    status = _status_from_checks(errors, warnings)
 
     emisor_raw = raw.get("emisor", {})
     receptor_raw = raw.get("receptor", {})
@@ -152,8 +153,9 @@ def _build_response(
         for w in warnings
     ]
 
-    receptor_rfc = receptor_raw.get("rfc", "") or ""
-    diot_reportable = receptor_rfc not in ("XAXX010101000", "XEXX010101000", "")
+    # DIOT reports the supplier (issuer), not the invoice recipient.
+    emisor_rfc = emisor_raw.get("rfc", "") or ""
+    diot_reportable = emisor_rfc not in ("XAXX010101000", "XEXX010101000", "")
 
     return {
         "status": status,
@@ -234,7 +236,6 @@ def _build_response(
 async def validate_cfdi(
     request: Request,
     api_key: Annotated[str, Depends(_require_api_key)],
-    xml_json: Optional[CFDIXMLJSONRequest] = None,
     file: Optional[UploadFile] = File(default=None),
 ) -> CFDIValidationResponse:
     """Validate a CFDI 4.0 XML document.
@@ -249,9 +250,28 @@ async def validate_cfdi(
     content_type = request.headers.get("content-type", "").lower()
     xml_str: str
 
-    # Case 2: JSON body — FastAPI parsed it into xml_json
-    if xml_json is not None:
-        xml_str = xml_json.xml_content
+    # Case 2: JSON body.  A File parameter makes FastAPI select form parsing,
+    # so parse JSON explicitly instead of relying on an optional body model.
+    if "application/json" in content_type:
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid JSON CFDI body: {exc}",
+            ) from exc
+        if not isinstance(payload, dict) or payload.get("xml_content") is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="xml_content is required",
+            )
+        try:
+            xml_str = CFDIXMLJSONRequest.model_validate(payload).xml_content
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=exc.errors(),
+            ) from exc
 
     # Case 3: multipart file upload
     elif "multipart/" in content_type or file is not None:
@@ -298,9 +318,15 @@ async def validate_cfdi(
 # ---------------------------------------------------------------------------
 
 
-def build_cfdi_validation_router(require_api_key: bool = True):
+def build_cfdi_validation_router(require_api_key: Any = None):
     """Return the CFDI validation router.
 
-    When require_api_key=False the endpoint skips auth via dependency override.
+    The application dependency validates the key and resolves its tenant; the
+    endpoint's local dependency still provides the raw header for backwards
+    compatible direct-router tests.
     """
-    return router
+    if require_api_key is None:
+        raise ValueError("require_api_key is required for the CFDI validation router")
+    secured = APIRouter()
+    secured.include_router(router, dependencies=[Depends(require_api_key)])
+    return secured

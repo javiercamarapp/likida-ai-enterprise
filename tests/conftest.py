@@ -224,6 +224,38 @@ def mock_conekta_responses():
 
 
 @pytest.fixture
+def full_client(tmp_path, monkeypatch):
+    """Full application with two real DB-bound tenant API keys."""
+    from fastapi.testclient import TestClient
+    from b2b_ai.api.app import create_app
+    from b2b_ai.db.db import Database
+
+    monkeypatch.delenv("B2B_API_KEY", raising=False)
+    monkeypatch.delenv("B2B_DEFAULT_TENANT_ID", raising=False)
+    monkeypatch.setenv("B2B_RATE_LIMIT", "off")
+    db = Database(str(tmp_path / "pilot-full.db"))
+    tenants = [
+        db.create_tenant("Piloto Uno", "PUN010101AA1"),
+        db.create_tenant("Piloto Dos", "PDO010101AA2"),
+    ]
+    keys = {
+        tenants[0]: "pilot-tenant-one-key-123456789",
+        tenants[1]: "pilot-tenant-two-key-123456789",
+    }
+    for tenant_id, key in keys.items():
+        db.create_api_key(tenant_id, f"pilot-{tenant_id}", key)
+
+    with TestClient(create_app(db=db)) as client:
+        yield {"client": client, "db": db, "tenants": tenants, "keys": keys}
+    db.close()
+
+
+@pytest.fixture
+def piloto_headers():
+    return {"X-API-Key": "pilot-test-key"}
+
+
+@pytest.fixture
 def pilot_client():
     """TestClient con los routers del piloto (auth stub → tenant_id).
 
