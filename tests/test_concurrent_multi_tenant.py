@@ -15,6 +15,11 @@ def multi_tenant_db(tmp_path):
     """Create a fresh database for concurrency tests."""
     from b2b_ai.db.db import Database
     db = Database(str(tmp_path / "concurrent_test.db"))
+    for tenant_id in range(1, 6):
+        created = db.create_tenant(
+            f"Tenant {tenant_id}", f"T{tenant_id:02d}010101AA{tenant_id}"
+        )
+        assert created == tenant_id
     yield db
     try:
         db.close()
@@ -35,9 +40,10 @@ class TestConcurrentTenantIsolation:
             try:
                 for i in range(num_items):
                     db.execute(
-                        "INSERT INTO invoices (tenant_id, rfc_emisor, subtotal, total, folio_fiscal) "
-                        "VALUES (?, ?, ?, ?, ?)",
-                        (tenant_id, f"RFC{tenant_id:03d}", 100.0 * (i + 1), 116.0 * (i + 1),
+                        "INSERT INTO invoices (tenant_id, emisor_rfc, archivo, subtotal, total, folio_fiscal) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (tenant_id, f"RFC{tenant_id:03d}", f"tenant-{tenant_id}-{i}.xml",
+                         100.0 * (i + 1), 116.0 * (i + 1),
                          f"UUID-{tenant_id}-{i}"),
                     )
                 results[tenant_id] = True
@@ -96,9 +102,10 @@ class TestConcurrentTenantIsolation:
         def write_record(i):
             try:
                 db.execute(
-                    "INSERT INTO invoices (tenant_id, rfc_emisor, subtotal, total, folio_fiscal) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (1, f"RFC{i:04d}", float(i), float(i) * 1.16, f"UUID-LOAD-{i}"),
+                    "INSERT INTO invoices (tenant_id, emisor_rfc, archivo, subtotal, total, folio_fiscal) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (1, f"RFC{i:04d}", f"load-{i}.xml", float(i),
+                     float(i) * 1.16, f"UUID-LOAD-{i}"),
                 )
             except Exception as e:
                 if "locked" in str(e).lower():

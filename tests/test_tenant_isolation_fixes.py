@@ -29,6 +29,20 @@ def _auth_for(tenant_id: str):
     return _dep
 
 
+def _mutable_auth(initial_tenant: str):
+    """Auth whose identity can change while the same router keeps its jobs."""
+    state = {"tenant_id": initial_tenant}
+
+    async def _dep():
+        return {
+            "key": f"key-{state['tenant_id']}",
+            "tenant_id": state["tenant_id"],
+            "user_id": f"user-{state['tenant_id']}",
+        }
+
+    return state, _dep
+
+
 def _client(router, tenant_id: str):
     """Monta un router en una app con la auth del tenant indicado."""
     app = FastAPI()
@@ -87,9 +101,10 @@ def test_p1_1_batch_router_cross_tenant_404():
 
 def test_p1_2_bookkeeping_process_uses_token_tenant():
     """El tenant_id del body es ignorado; se usa el del token."""
+    auth_state, auth_dep = _mutable_auth("tenant_autenticado")
     router = build_bookkeeping_router(
         db=None,
-        require_api_key=_auth_for("tenant_autenticado"),
+        require_api_key=auth_dep,
     )
     client = _client(router, "tenant_autenticado")
 
@@ -103,35 +118,41 @@ def test_p1_2_bookkeeping_process_uses_token_tenant():
     assert resp.status_code == 200, resp.text
     job_id = resp.json()["job_id"]
 
-    # El job se creó bajo el tenant del token.
+    # La misma instancia cambia a la identidad falsificada. Si el job hubiera
+    # confiado en el body, el atacante lo vería; debe responder 404.
+    auth_state["tenant_id"] = "tenant_atacante"
+    status_resp = client.get(f"/api/v1/bookkeeping/status?job_id={job_id}")
+    assert status_resp.status_code == 404, status_resp.text
+
+    # La identidad autenticada original sí puede verlo.
+    auth_state["tenant_id"] = "tenant_autenticado"
     status_resp = client.get(f"/api/v1/bookkeeping/status?job_id={job_id}")
     assert status_resp.status_code == 200, status_resp.text
 
 
 def test_p1_2_bookkeeping_status_rejects_other_tenant_job():
     """GET /status?job_id= de un job ajeno responde 404."""
-    client_a = _client(
-        build_bookkeeping_router(db=None, require_api_key=_auth_for("tenant_A")),
+    auth_state, auth_dep = _mutable_auth("tenant_A")
+    client = _client(
+        build_bookkeeping_router(db=None, require_api_key=auth_dep),
         "tenant_A",
-    )
-    client_b = _client(
-        build_bookkeeping_router(db=None, require_api_key=_auth_for("tenant_B")),
-        "tenant_B",
     )
 
     payload = {"tenant_id": "irrelevante",
                "cfdis": [{"uuid": "u1", "rfc_emisor": "XAXX010101000",
                           "descripcion": "compra", "total": 50.0}]}
-    resp_a = client_a.post("/api/v1/bookkeeping/process", json=payload)
+    resp_a = client.post("/api/v1/bookkeeping/process", json=payload)
     assert resp_a.status_code == 200, resp_a.text
     job_id = resp_a.json()["job_id"]
 
     # tenant_B consulta el job de tenant_A → 404 (sin filtrar existencia).
-    res_b = client_b.get(f"/api/v1/bookkeeping/status?job_id={job_id}")
+    auth_state["tenant_id"] = "tenant_B"
+    res_b = client.get(f"/api/v1/bookkeeping/status?job_id={job_id}")
     assert res_b.status_code == 404
 
     # tenant_A sí puede verlo.
-    res_a = client_a.get(f"/api/v1/bookkeeping/status?job_id={job_id}")
+    auth_state["tenant_id"] = "tenant_A"
+    res_a = client.get(f"/api/v1/bookkeeping/status?job_id={job_id}")
     assert res_a.status_code == 200
 
 

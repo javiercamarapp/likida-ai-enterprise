@@ -104,7 +104,10 @@ class ConektaAPIClient:
         )
         self.environment = environment
         self._base_url = CONEKTA_API_BASE
-        self._client = httpx.Client(timeout=30.0)
+        # Do not silently route payment credentials through ambient process
+        # proxies.  Deployments that need a proxy can inject one explicitly in
+        # a future transport configuration.
+        self._client = httpx.Client(timeout=30.0, trust_env=False)
 
     def _headers(self) -> Dict[str, str]:
         """Headers requeridos por la API de Conekta v2."""
@@ -213,7 +216,9 @@ class ConektaGateway:
             "B2B_CONEKTA_WEBHOOK_SECRET", ""
         )
         self._mock = mock if mock is not None else mock_mode_enabled()
-        self._client = ConektaAPIClient(
+        # Mock mode must be completely offline, including construction.  This
+        # also avoids allocating an unused connection pool in tests and demos.
+        self._client = None if self._mock else ConektaAPIClient(
             api_key=self.api_key,
             webhook_secret=self.webhook_secret,
         )
@@ -832,4 +837,5 @@ class ConektaGateway:
 
     def close(self) -> None:
         """Cierra el cliente HTTP del gateway."""
-        self._client.close()
+        if self._client is not None:
+            self._client.close()

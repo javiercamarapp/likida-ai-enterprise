@@ -99,7 +99,11 @@ def test_upload_rechaza_extensiones_no_cfdi(ctx):
         r = c.post("/api/v1/invoices/process", headers=h,
                    files={"xml_file": ("malo" + ext, b"<xml/>", "text/xml")})
         assert r.status_code == 422, (ext, r.status_code)
-        assert "Solo se aceptan" in r.json().get("detail", ""), ext
+        body = r.json()
+        detail = body.get("detail", "")
+        if not detail:
+            detail = str(body.get("error", {}).get("details", ""))
+        assert "Solo se aceptan" in detail, ext
 
 
 def test_upload_acepta_xml(ctx):

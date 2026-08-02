@@ -78,6 +78,7 @@ from b2b_ai.api.auth import APIKeyAuth, make_require_api_key
 from b2b_ai.db.tenants import TenantManager
 from b2b_ai.api import webhooks as wh
 from b2b_ai.api import v2 as api_v2
+from b2b_ai.api.routes.cfdi_validation import build_cfdi_validation_router
 from b2b_ai.api import portal as portal_mod
 from b2b_ai.portal.routes import build_portal_pages_router
 from b2b_ai.notifications.api import build_notifications_router
@@ -402,8 +403,11 @@ def create_app(db=None):
             from b2b_ai.infrastructure.graceful_shutdown import _shutdown_state
             _shutdown_state.is_draining = True
 
-        signal.signal(signal.SIGTERM, _graceful_shutdown)
-        signal.signal(signal.SIGINT, _graceful_shutdown)
+        # Signal registration is only valid in the main interpreter thread.
+        import threading as _threading
+        if _threading.current_thread() is _threading.main_thread():
+            signal.signal(signal.SIGTERM, _graceful_shutdown)
+            signal.signal(signal.SIGINT, _graceful_shutdown)
 
         # --- Migraciones en background (no bloquean el healthcheck) ---
         # Con migrate=False en el constructor, uvicorn escucha al instante y
@@ -419,7 +423,6 @@ def create_app(db=None):
                 except Exception as exc:  # noqa: BLE001
                     _structured_log.error("db_migrations_failed", extra={
                         "detail": str(exc)})
-            import threading as _threading
             _mt = _threading.Thread(target=_run_migrations, daemon=True)
             _mt.start()
 
@@ -561,6 +564,7 @@ def create_app(db=None):
     # Auth
     auth = APIKeyAuth(db)
     require_api_key = make_require_api_key(auth)
+    require_v2_api_key = make_require_api_key(auth, allow_service=True)
 
     # Audit trail: auto-registra TODAS las mutaciones de la API (POST/PUT/
     # PATCH/DELETE) con contexto de usuario (API key), IP y estado. Best-effort:
@@ -608,6 +612,7 @@ def create_app(db=None):
 
     # Invoice processing, listing, stats (extracted to routes_invoices.py)
     app.include_router(build_invoices_router(db, require_api_key))
+    app.include_router(build_cfdi_validation_router(require_api_key))
 
     @app.get("/api/v1/tools",
              summary="Tools registradas en el agente.",
@@ -973,7 +978,7 @@ def create_app(db=None):
     wh.register_webhook_routes(app, db, require_api_key)
 
     # API v2 enterprise (multi-tenant robusto).
-    app.include_router(api_v2.build_v2_router(db, require_api_key, auth))
+    app.include_router(api_v2.build_v2_router(db, require_v2_api_key, auth))
 
     # Portal del cliente (server-rendered): páginas HTML de consulta.
     # Se registra ANTES de la API JSON para que /portal/invoices (HTML) y
@@ -1146,7 +1151,7 @@ def create_app(db=None):
         @app.get("/robots.txt", include_in_schema=False)
         def robots():
             sitemap_url = os.environ.get(
-                "B2B_SITEMAP_URL", "").strip()
+                "B2B_SITEMAP_URL", "https://likida.ai/sitemap.xml").strip()
             sitemap_line = f"Sitemap: {sitemap_url}\n" if sitemap_url else ""
             return PlainTextResponse(
                 f"User-agent: *\nAllow: /\n\n{sitemap_line}")

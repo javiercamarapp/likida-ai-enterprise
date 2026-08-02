@@ -111,6 +111,17 @@ class Database:
         with self._version_lock:
             self._data_version += 1
 
+    def execute(self, sql: str, params=()):
+        """Execute and commit one statement on the current thread connection.
+
+        Keeping this thin compatibility method on ``Database`` ensures callers
+        receive the same thread-local/WAL behavior as the higher-level helpers.
+        """
+        cursor = self.conn.execute(sql, params)
+        self.conn.commit()
+        self._bump_version()
+        return cursor
+
     @property
     def conn(self):
         """Conexión del hilo actual (SQLite o PostgreSQL), creada perezosamente."""
@@ -334,6 +345,28 @@ class Database:
                   row["razon_clasificacion"]))
         self.conn.commit()
         return invoice_id, inserted
+
+    def update_invoice_erp(self, invoice_id, tenant_id, erp):
+        """Persist ERP evidence for one tenant-scoped invoice."""
+        erp = erp or {}
+        erp_status = erp.get("status", "")
+        if erp_status == "pending_approval":
+            status = "pending_approval"
+        elif erp_status == "rejected_invalid_cfdi":
+            status = "rejected"
+        elif erp.get("ok"):
+            status = "procesado"
+        else:
+            status = "erp_failed"
+        cur = self.conn.execute(
+            "UPDATE invoices SET erp_poliza=?, erp_status=?, status=? "
+            "WHERE id=? AND tenant_id=?",
+            (erp.get("poliza"), erp_status, status, invoice_id, tenant_id),
+        )
+        self.conn.commit()
+        if cur.rowcount:
+            self._bump_version()
+        return bool(cur.rowcount)
 
     def list_invoices(self, tenant_id=None, limit=None,
                       categoria=None, valido=None, fecha_desde=None,
@@ -643,8 +676,8 @@ class Database:
         """Movimientos persistidos del tenant, en orden de inserción."""
         rows = self.conn.execute(
             "SELECT data FROM bank_transactions"
-            " WHERE COALESCE(tenant_id, -1)=COALESCE(?, -1)"
-            " ORDER BY id ASC", (tenant_id,)).fetchall()
+            " WHERE (tenant_id=? OR (tenant_id IS NULL AND ? IS NULL))"
+            " ORDER BY id ASC", (tenant_id, tenant_id)).fetchall()
         out = []
         for r in rows:
             try:
@@ -658,8 +691,9 @@ class Database:
         with self.conn:
             self.conn.execute(
                 "DELETE FROM bank_confirmations"
-                " WHERE COALESCE(tenant_id, -1)=COALESCE(?, -1) AND tx_id=?",
-                (tenant_id, str(tx_id)))
+                " WHERE (tenant_id=? OR (tenant_id IS NULL AND ? IS NULL))"
+                " AND tx_id=?",
+                (tenant_id, tenant_id, str(tx_id)))
             self.conn.execute(
                 "INSERT INTO bank_confirmations(tenant_id, tx_id, invoice_id)"
                 " VALUES (?,?,?)",
@@ -669,8 +703,8 @@ class Database:
         """Confirmaciones manuales del tenant como {tx_id: invoice_id}."""
         rows = self.conn.execute(
             "SELECT tx_id, invoice_id FROM bank_confirmations"
-            " WHERE COALESCE(tenant_id, -1)=COALESCE(?, -1)",
-            (tenant_id,)).fetchall()
+            " WHERE (tenant_id=? OR (tenant_id IS NULL AND ? IS NULL))",
+            (tenant_id, tenant_id)).fetchall()
         return {r["tx_id"]: r["invoice_id"] for r in rows}
 
     def clear_bank_reconciliation(self, tenant_id=None):
@@ -679,8 +713,8 @@ class Database:
             for tabla in ("bank_transactions", "bank_confirmations"):
                 self.conn.execute(
                     f"DELETE FROM {tabla}"  # nosec B608 — nombre literal fijo
-                    " WHERE COALESCE(tenant_id, -1)=COALESCE(?, -1)",
-                    (tenant_id,))
+                    " WHERE (tenant_id=? OR (tenant_id IS NULL AND ? IS NULL))",
+                    (tenant_id, tenant_id))
 
     # ---- API keys (multi-tenant) ----
     def create_api_key(self, tenant_id, name, key):

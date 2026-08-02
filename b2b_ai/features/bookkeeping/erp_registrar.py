@@ -35,6 +35,7 @@ def _poliza_to_invoice_dict(poliza: "PolizaContable") -> Dict[str, Any]:
     return {
         "id": poliza.id,
         "folio": poliza.erp_reference or poliza.id,
+        "folio_fiscal": poliza.erp_reference or poliza.id,
         "fecha": getattr(poliza, "fecha", None),
         "tipo": poliza.tipo.value if hasattr(poliza.tipo, "value") else str(poliza.tipo),
         "concepto": poliza.concepto,
@@ -186,13 +187,29 @@ class ERPRegistrar:
             result = adapter.register_invoice(invoice_payload)
 
             if isinstance(result, dict):
-                ref = str(result.get("folio") or result.get("id")
-                          or result.get("reference") or f"ERP-{poliza.id}")
+                if not result.get("ok", False):
+                    raise RuntimeError(
+                        str(result.get("message") or result.get("error")
+                            or "ERP rejected the registration")
+                    )
+                registro = result.get("registro") or {}
+                ref_value = (
+                    result.get("folio") or result.get("id")
+                    or result.get("reference") or registro.get("folio_fiscal")
+                )
             else:
-                ref = str(getattr(result, "folio", None)
-                          or getattr(result, "id", None)
-                          or getattr(result, "reference", None)
-                          or f"ERP-{poliza.id}")
+                if hasattr(result, "ok") and not result.ok:
+                    raise RuntimeError(
+                        str(getattr(result, "message", "ERP rejected the registration"))
+                    )
+                ref_value = (getattr(result, "folio", None)
+                             or getattr(result, "id", None)
+                             or getattr(result, "reference", None))
+            if not ref_value:
+                raise RuntimeError(
+                    "ERP reported success without a verifiable reference"
+                )
+            ref = str(ref_value)
             log.info(
                 "ERP %s: registered poliza %s as %s",
                 self._erp_system.value, poliza.id, ref)

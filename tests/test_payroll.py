@@ -11,7 +11,7 @@ from b2b_ai.services.payroll import (calc_isr, calc_imss, calc_infonavit,
 
 def test_isr_rango_bajo():
     r = calc_isr(8000)
-    # 8000 falls into bracket (6447.12, 12255.53) with cuota_fija=936.05 + 10.88% of excess
+    # 8000 falls into the 6,936.24–13,074.34 bracket for the active table.
     imp = Decimal(r["impuesto"])
     assert imp > Decimal("0")
 
@@ -22,7 +22,7 @@ def test_isr_cero():
 
 def test_isr_ultimo_rango():
     r = calc_isr(500000)
-    assert r["rango_aplicado"]["limite_inferior"] == "68821.63"
+    assert r["rango_aplicado"]["limite_inferior"] == "133596.28"
 
 
 def test_imss_total_positivo():

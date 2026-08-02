@@ -66,7 +66,9 @@ class PoolConfig:
 @dataclass
 class PoolMetrics:
     """Connection pool metrics (thread-safe)."""
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    # snapshot() reads the average properties while holding this lock; it must
+    # therefore be re-entrant or metrics/report endpoints deadlock forever.
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     total_connections_created: int = 0
     total_connections_recycled: int = 0
     total_connections_errored: int = 0

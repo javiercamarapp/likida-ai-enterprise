@@ -82,7 +82,9 @@ class AsyncSMTPProvider:
         self.from_addr = (
             from_addr
             or env.get("SMTP_FROM")
-            or env.get("B2B_SMTP_FROM", os.environ.get("B2B_DEFAULT_EMAIL", ""))
+            or env.get("B2B_SMTP_FROM")
+            or os.environ.get("B2B_DEFAULT_EMAIL")
+            or "agente@likida.ai"
         )
         self.use_ssl = bool(use_ssl)
         if env.get("SMTP_USE_SSL", env.get("B2B_SMTP_USE_SSL", "")).lower() in (
@@ -206,13 +208,6 @@ class AsyncSMTPProvider:
                 attachments, template=template, html=bool(html),
             )
 
-        if aiosmtplib is None:  # pragma: no cover
-            return self._record(
-                to, subject, "error",
-                "aiosmtplib no está instalado. Ejecuta: pip install aiosmtplib",
-                attachments, template=template, html=bool(html),
-            )
-
         msg = self._build_message(
             to, subject, body, html=html, attachments=attachments, cc=cc
         )
@@ -222,6 +217,13 @@ class AsyncSMTPProvider:
                 to, subject, "simulado",
                 "SMTP no configurado; email simulado. "
                 "Configurar SMTP_HOST/SMTP_USER/SMTP_PASS para envío real.",
+                attachments, template=template, html=bool(html),
+            )
+
+        if aiosmtplib is None:  # pragma: no cover
+            return self._record(
+                to, subject, "error",
+                "aiosmtplib no está instalado. Ejecuta: pip install aiosmtplib",
                 attachments, template=template, html=bool(html),
             )
 

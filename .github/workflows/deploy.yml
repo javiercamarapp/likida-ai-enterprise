@@ -4,6 +4,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+permissions:
+  contents: read
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -14,6 +16,9 @@ jobs:
     defaults:
       run:
         shell: bash -euo pipefail {0}
+    env:
+      B2B_ENV: testing
+      B2B_JWT_SECRET: ci-only-ephemeral-secret-not-for-production-0001
     steps:
       - uses: actions/checkout@v4
 
@@ -35,20 +40,15 @@ jobs:
       - name: Recopilar tests (sin bloqueos de import)
         run: |
           python -m compileall -q b2b_ai/
-          B2B_ENV=development python -c "import b2b_ai.features.diot; import b2b_ai.api.app; print('imports OK')"
-        env:
-          B2B_ENV: development
+          python -c "import b2b_ai.features.diot; import b2b_ai.api.app; print('imports OK')"
 
       - name: Ejecutar suite de tests
         # --timeout mata tests colgados (init pesado de app.py); -x no; corre todo
         run: pytest -q --timeout=120 -m "not computer_use_e2e" --ignore=tests/test_computer_use_e2e.py
-        env:
-          B2B_ENV: development
 
       - name: Ejecutar E2E Computer Use (Chromium real)
         run: pytest -q --timeout=180 tests/test_computer_use_e2e.py
-        env:
-          B2B_ENV: development
 
       - name: Security lint (bandit)
-        run: bandit -r b2b_ai/ -ll --skip B101 || true
+        # Bloquea hallazgos HIGH; la deuda MEDIUM se sigue auditando.
+        run: bandit -r b2b_ai/ -lll --skip B101

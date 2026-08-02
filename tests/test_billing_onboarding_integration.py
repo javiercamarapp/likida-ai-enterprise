@@ -67,7 +67,10 @@ def wizard():
 
 def _run_to_test_cfdi(wizard):
     """Avanza los 4 pasos de datos (tenant..test_cfdi)."""
-    session = wizard.start()
+    # Match the tenant returned by the authenticated API fixture.  Sessions
+    # are tenant-owned and the router intentionally returns 404 for another
+    # tenant's identifier.
+    session = wizard.start(tenant_id="tenant_test_123")
     wizard.advance_step(session.session_id, "tenant", {
         "company_name": "Despacho Fides, S.C.",
         "admin_name": "Mariana Fernández",
@@ -246,6 +249,23 @@ class TestCheckoutAPI:
         assert body["status"] == "paid"
         assert body["subscription"]["plan_code"] == "starter"
         assert body["subscription"]["status"] == "active"
+
+    def test_production_callback_cannot_self_assert_payment(
+        self, client, wizard, monkeypatch
+    ):
+        monkeypatch.setenv("B2B_ENV", "production")
+        monkeypatch.delenv("B2B_PAYMENTS_MOCK", raising=False)
+        session = _run_to_test_cfdi(wizard)
+        client.post(
+            f"/api/v1/onboarding-wizard/{session.session_id}/checkout",
+            json={"plan": "starter"},
+        )
+        r = client.post(
+            f"/api/v1/onboarding-wizard/{session.session_id}/checkout/callback",
+            json={"status": "paid", "plan": "starter"},
+        )
+        assert r.status_code == 409
+        assert "signed Conekta webhook" in r.json()["detail"]
 
     def test_callback_failed_no_subscription(self, client, wizard):
         session = _run_to_test_cfdi(wizard)

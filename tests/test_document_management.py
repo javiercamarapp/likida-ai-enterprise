@@ -160,7 +160,7 @@ def test_share_and_list(service):
 
 def test_add_tag_and_archive(service):
     doc = service.upload_document("T1", "doc.pdf", b"data")
-    service.add_tag("T1", doc.id, "nuevo")
+    doc = service.add_tag("T1", doc.id, "nuevo")
     assert "nuevo" in doc.tags
     archived = service.archive_document("T1", doc.id)
     assert archived.status.value == "ARCHIVADO"

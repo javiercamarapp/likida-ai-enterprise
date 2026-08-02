@@ -153,7 +153,11 @@ def test_cfdi_caracteres_invalidos_422(ctx, tmp_path):
         r = c.post("/api/v1/invoices/process", headers=_h(),
                    files={"xml_file": ("badchar.xml", fh, "text/xml")})
     assert r.status_code == 422, r.text
-    assert "CFDI inválido" in r.json().get("detail", "")
+    body = r.json()
+    detail = body.get("detail", "") or str(
+        body.get("error", {}).get("details", "")
+    )
+    assert "CFDI inválido" in detail
 
 
 # --------------------------------------------------------------------------- #

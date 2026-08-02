@@ -69,9 +69,9 @@ class SPEIPayment:
 
         if not self.stp_token or self.stp_token.startswith("test"):
             # Sandbox mode: simulate success
-            stp_id = hashlib.md5(
+            stp_id = hashlib.md5(  # nosec B324 - non-security sandbox identifier
                 f"{order.clave_rastreo}{order.monto}{datetime.utcnow().isoformat()}"
-                .encode()
+                .encode(), usedforsecurity=False
             ).hexdigest()[:16]
             return {
                 "stp_id": stp_id,

@@ -34,6 +34,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     B2B_WORKERS=1 \
     B2B_HOST=0.0.0.0 \
     B2B_PORT=8000 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PORT=8000
 
 WORKDIR /app
@@ -51,6 +52,11 @@ COPY --from=builder /build/migrations /app/migrations
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Computer Use production runtime: Chromium plus its system libraries in a
+# location readable by the unprivileged application user.
+RUN python -m playwright install --with-deps chromium \
+    && chmod -R a+rX /ms-playwright
 
 RUN mkdir -p /data
 RUN useradd --create-home --uid 1000 b2b \

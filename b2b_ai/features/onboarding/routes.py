@@ -16,6 +16,7 @@ La lógica es la misma del spec del task; sólo cambia el prefijo.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path
@@ -116,6 +117,22 @@ def build_onboarding_wizard_router(
     service = OnboardingWizard(db=db)
     router = APIRouter(prefix=ROUTER_PREFIX, tags=["onboarding-wizard", "piloto"])
 
+    def _auth_tenant(auth_info: dict) -> str:
+        tenant_id = (auth_info or {}).get("tenant_id")
+        if tenant_id is None or str(tenant_id).strip() == "":
+            raise HTTPException(status_code=400, detail="Authenticated tenant is required")
+        return str(tenant_id)
+
+    def _owned_session(session_id: str, auth_info: dict) -> OnboardingSession:
+        """Resolve a session without revealing another tenant's identifiers."""
+        try:
+            session = service.get_session(session_id)
+        except OnboardingWizardError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        if str(session.tenant_id) != _auth_tenant(auth_info):
+            raise HTTPException(status_code=404, detail="Onboarding session not found")
+        return session
+
     @router.post(
         "/start",
         summary="Crea una sesión de onboarding nueva.",
@@ -126,7 +143,10 @@ def build_onboarding_wizard_router(
         auth_info: dict = Depends(auth_dep),
     ) -> StartResponse:
         """Inicia el flujo del Día 1 para el primer cliente piloto."""
-        session = service.start(tenant_id=req.tenant_id)
+        tenant_id = _auth_tenant(auth_info)
+        if req.tenant_id is not None and str(req.tenant_id) != tenant_id:
+            raise HTTPException(status_code=403, detail="Tenant mismatch")
+        session = service.start(tenant_id=tenant_id)
         return StartResponse(ok=True, session=session.to_dict())
 
     @router.get(
@@ -139,10 +159,7 @@ def build_onboarding_wizard_router(
         auth_info: dict = Depends(auth_dep),
     ) -> StepResponse:
         """Estado de la sesión; sirve para retomar donde quedó si se corta."""
-        try:
-            session = service.get_session(session_id)
-        except OnboardingWizardError as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
+        session = _owned_session(session_id, auth_info)
         return StepResponse(ok=True, session=session.to_dict())
 
     @router.post(
@@ -157,6 +174,7 @@ def build_onboarding_wizard_router(
         auth_info: dict = Depends(auth_dep),
     ) -> StepResponse:
         """Avanza el flujo ejecutando el siguiente paso con su payload."""
+        _owned_session(session_id, auth_info)
         try:
             session = service.advance_step(session_id, step, req.payload)
         except OnboardingWizardError as exc:
@@ -173,6 +191,7 @@ def build_onboarding_wizard_router(
         auth_info: dict = Depends(auth_dep),
     ) -> CompleteResponse:
         """Marca la sesión como completa y devuelve el checklist de salud."""
+        _owned_session(session_id, auth_info)
         try:
             result = service.complete(session_id)
         except OnboardingWizardError as exc:
@@ -194,6 +213,7 @@ def build_onboarding_wizard_router(
         auth_info: dict = Depends(auth_dep),
     ) -> CheckoutResponse:
         """Crea la sesión de pago de Conekta y devuelve la URL de checkout."""
+        _owned_session(session_id, auth_info)
         try:
             reference = service.start_checkout(
                 session_id, req.plan,
@@ -227,10 +247,7 @@ def build_onboarding_wizard_router(
         - paid    -> activa el plan (activate_pilot) y cierra la sesión.
         - failed / canceled -> registra el fallo; no se activa nada.
         """
-        try:
-            session = service.get_session(session_id)
-        except OnboardingWizardError as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
+        session = _owned_session(session_id, auth_info)
 
         from b2b_ai.features.billing.conekta_client import ConektaClient
         from b2b_ai.features.billing.service import (
@@ -240,9 +257,30 @@ def build_onboarding_wizard_router(
         )
         billing = BillingService(client=ConektaClient())
         status = (req.status or "").strip().lower()
+        if status not in {"paid", "failed", "canceled"}:
+            raise HTTPException(
+                status_code=422,
+                detail="status must be one of: paid, failed, canceled",
+            )
 
         subscription = None
         if status == "paid":
+            # A browser redirect is not payment evidence.  Outside an explicit
+            # test/mock environment, subscription activation must be driven by
+            # the signed Conekta webhook receiver, never by a tenant-provided
+            # `status: paid` value.
+            payments_mock = os.environ.get("B2B_PAYMENTS_MOCK", "") == "1"
+            test_env = os.environ.get("B2B_ENV", "").lower() in {
+                "test", "testing",
+            }
+            if not (payments_mock or test_env):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Payment is pending provider verification; production "
+                        "activation requires a signed Conekta webhook."
+                    ),
+                )
             plan = (req.plan or "").strip().lower()
             if not plan:
                 # Si no se indica plan, se usa el que se guardó en la sesión.
