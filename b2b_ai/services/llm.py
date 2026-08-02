@@ -631,10 +631,13 @@ class LLMService:
         self.last_source = "rules"
         self.last_error = None
         self.budget = get_token_budget()
+        # LI-02: Circuit breaker for LLM calls
+        from b2b_ai.infrastructure.circuit_breaker import get_or_create_breaker
+        self._breaker = get_or_create_breaker("llm_calls")
 
     # ---- helpers internos -------------------------------------------------
     def _run(self, task, payload):
-        """Ejecuta una tarea LLM con sanitización y control de presupuesto."""
+        """Ejecuta una tarea LLM con sanitización, circuit breaker y control de presupuesto."""
         self.budget.check_allowance()
         system, user = _render_prompt(task, payload)
         messages = [{"role": "system", "content": system},
@@ -643,7 +646,8 @@ class LLMService:
         messages = self.budget.clamp_input(messages)
         max_tokens = self.budget.clamp_max_tokens(512)
         try:
-            text = self.client.complete(messages, max_tokens=max_tokens)
+            with self._breaker:
+                text = self.client.complete(messages, max_tokens=max_tokens)
         except LLMError:
             raise
         except Exception as e:  # noqa: BLE001
