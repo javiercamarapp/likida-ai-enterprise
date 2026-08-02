@@ -18,6 +18,43 @@ fixtures/
 .gitignore
 .coverage
 demo-data/
+# Documentación y reportes (no necesarios en el contenedor)
+docs/
+reports/
+*.md
+!README.md
+!pyproject.toml
+# Landing alternativa y assets grandes duplicados
+enterprise/
+# Archivos de desarrollo y multimedia fuera de landing
+.hermes/
+.cache/
+node_modules/
+*.log
+*.tar.gz
+docs/**/*.mp4
+docs/**/*.png
+docs/**/*.jpg
+reports/**/*.mp4
+reports/**/*.png
+reports/**/*.jpg
+# Archivos de configuración local
+.railway/
+railway.toml
+Dockerfile
+docker-compose*.yml
+.dockerignore
+Makefile
+deploy-*.sh
+start.sh
+stop.sh
+test.sh
+runtime.txt
+requirements-*.txt
+alembic.ini
+.env.example
+.env.production.example
+.env.railway.example
 demo-output/
 tests/
 docs/
