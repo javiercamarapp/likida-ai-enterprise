@@ -1,4 +1,10 @@
-# Dependencias / entornos locales que NO deben entrar al contexto de build.
+# =============================================================================
+# .dockerignore — Minimiza el contexto de build para evitar el bug de tar
+# stream en macOS con el builder legacy (DOCKER_BUILDKIT=0).
+# Contexto ideal: solo pyproject.toml, README.md, b2b_ai/ y landing/.
+# =============================================================================
+
+# --- Entornos / caches locales ---
 .venv/
 __pycache__/
 *.pyc
@@ -9,37 +15,63 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+
+# --- Bases de datos y temporales ---
 *.db
+*.db-shm
+*.db-wal
 b2b_ai.db
+.coverage
 .DS_Store
+
+# --- Entorno / secrets ---
 .env
-fixtures/
+.env.*
+!.env.example
+
+# --- Git y CI ---
 .git/
 .gitignore
-.coverage
-demo-data/
-# Documentación y reportes (no necesarios en el contenedor)
+.railway/
+
+# --- Documentación y reportes (no necesarios en el contenedor) ---
 docs/
 reports/
 *.md
 !README.md
-!pyproject.toml
-# Landing alternativa y assets grandes duplicados
-enterprise/
-# Archivos de desarrollo y multimedia fuera de landing
+
+# --- Tests y scripts de desarrollo ---
+tests/
+scripts/
+fixtures/
+demo-data/
+demo-output/
+demo_server.py
+demo_launch.sh
+demo_run.sh
+fix_integrations.py
+add_env_vars.py
+
+# --- Landing alternativa (no la principal) ---
+landing-b/
+
+# --- Código fuente auxiliar no necesario para pip install ---
+_src/
+
+# --- Hermes / IDE / cache ---
 .hermes/
 .cache/
 node_modules/
+
+# --- Logs y archivos grandes ---
 *.log
 *.tar.gz
-docs/**/*.mp4
-docs/**/*.png
-docs/**/*.jpg
-reports/**/*.mp4
-reports/**/*.png
-reports/**/*.jpg
-# Archivos de configuración local
-.railway/
+*.mp4
+*.png
+*.jpg
+*.jpeg
+
+# --- Configuración de deploy (no necesarios en el contenedor) ---
 railway.toml
 Dockerfile
 docker-compose*.yml
@@ -52,10 +84,13 @@ test.sh
 runtime.txt
 requirements-*.txt
 alembic.ini
-.env.example
-.env.production.example
-.env.railway.example
-demo-output/
-tests/
-docs/
-scripts/
+Procfile
+
+# --- Reportes y QA ---
+QA_REPORT*.md
+FIX_REPORT.md
+MODULE_REPORT.md
+PG_BUG_REPORT.md
+DEPLOY*.md
+README-DEMO.md
+README-DEPLOY.md
