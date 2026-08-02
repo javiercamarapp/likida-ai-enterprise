@@ -303,6 +303,13 @@ def validate_cfdi(datos):
 
     # ---- 9. DIOT: proveedores reportables ----
     if tdc == "I" and subtotal is not None and subtotal > 0:
+        # BUG-F4: RFC genérico — no deducible, IVA no acreditable (CFF Art. 27, LIVA Art. 5)
+        if datos.get("emisor_rfc_generico"):
+            warnings.append(
+                "CFDI al público en general (RFC genérico): NO es deducible de ISR "
+                "(CFF Art. 27) ni genera IVA acreditable (LIVA Art. 5). "
+                "No incluir en DIOT como IVA acreditable."
+            )
         diot["reportable"] = True
         diot["proveedores_reportables"].append({
             "rfc_proveedor": datos.get("emisor_rfc", ""),

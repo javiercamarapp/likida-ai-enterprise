@@ -113,6 +113,14 @@ class AgentLoop:
         channel = cfg.get("notif_channel", "email")
         archivo = os.path.basename(xml_path)
 
+        # Bug #9: Request context for log correlation in agent loop
+        from b2b_ai.monitoring.logger import request_context
+        with request_context(tenant_id=tenant_id):
+            return self._process_inner(xml_path, tenant_id, cfg, policy,
+                                       channel, archivo)
+
+    def _process_inner(self, xml_path, tenant_id, cfg, policy, channel, archivo):
+        """Core processing logic, called within request_context."""
         pasos = []
         review_id = None
         review_reason = None
@@ -253,6 +261,16 @@ class AgentLoop:
 
         if decision == "needs_review":
             review_id = self._escalate(tenant_id, inv_id, review_reason)
+
+        # Bug #9: Record agent processing metric
+        try:
+            self.db.insert_agent_metric(
+                tenant_id, "agent_processed", 1.0,
+                {"decision": decision, "categoria": clasif.get("categoria") if clasif else None,
+                 "confianza": clasif.get("confianza") if clasif else None,
+                 "archivo": archivo})
+        except Exception:  # noqa: BLE001
+            pass  # metrics are best-effort
 
         return self._result(decision, archivo, pasos, review_id, review_reason,
                             erp_res, inv_id, inserted, datos, validacion,

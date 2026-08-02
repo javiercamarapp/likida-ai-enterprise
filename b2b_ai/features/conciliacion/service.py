@@ -458,9 +458,13 @@ class ConciliationService(ManualProcessMixin):
 
         # Detect duplicates in bank transactions
         if bank_txns:
-            seen_amounts: Dict[float, List[str]] = {}
+            # BUG-F22: Use (amount, date, description[:20]) as duplicate key
+            # to avoid false positives when same amount on same date has
+            # different descriptions (e.g., two different supplier payments).
+            seen_amounts: Dict[tuple, List[str]] = {}
             for txn in bank_txns:
-                key = (txn.amount, txn.date)
+                desc_prefix = (txn.description or "")[:20].lower().strip()
+                key = (txn.amount, txn.date, desc_prefix)
                 if key not in seen_amounts:
                     seen_amounts[key] = []
                 seen_amounts[key].append(txn.id)

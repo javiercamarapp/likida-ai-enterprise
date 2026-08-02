@@ -383,10 +383,14 @@ class Database:
         q += " ORDER BY id ASC LIMIT 1"
         row = self.conn.execute(q, params).fetchone()
         if row:
+            job_id = row["id"]
             self.conn.execute(
                 "UPDATE job_queue SET status='running', started_at=CURRENT_TIMESTAMP WHERE id=?",
-                (row["id"],))
+                (job_id,))
             self.conn.commit()
+            # Return updated row
+            row = self.conn.execute("SELECT * FROM job_queue WHERE id=?",
+                                    (job_id,)).fetchone()
         return dict(row) if row else None
 
     def complete_job(self, job_id):
@@ -418,6 +422,80 @@ class Database:
             "SELECT COUNT(*) FROM job_queue WHERE status='pending' AND poison=0"
         ).fetchone()
         return row[0] if row else 0
+
+    # ---- Conciliación persistente (Bug #3) ----
+    def create_conciliation_session(self, tenant_id, user_id=None, criteria=None,
+                                     date_tolerance_days=3, discrepancy_threshold=0.02,
+                                     amount_tolerance=0.01):
+        """Bug #3: Create a persistent conciliation session."""
+        import json as _json
+        criteria_txt = _json.dumps(criteria, default=str, ensure_ascii=False) if criteria else None
+        cur = self.conn.execute(
+            """INSERT INTO conciliation_sessions
+               (tenant_id, user_id, criteria, date_tolerance_days,
+                discrepancy_threshold, amount_tolerance)
+               VALUES (?,?,?,?,?,?)""",
+            (tenant_id, user_id, criteria_txt, date_tolerance_days,
+             discrepancy_threshold, amount_tolerance))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def save_conciliation_match(self, session_id, tenant_id, bank_transaction_id,
+                                 match_type, confidence_score,
+                                 poliza_id=None, cfdi_uuid=None, status="proposed"):
+        """Bug #3: Persist a conciliation match."""
+        cur = self.conn.execute(
+            """INSERT INTO conciliation_matches
+               (session_id, tenant_id, bank_transaction_id, poliza_id, cfdi_uuid,
+                match_type, confidence_score, status)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (session_id, tenant_id, bank_transaction_id, poliza_id, cfdi_uuid,
+             match_type, confidence_score, status))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def update_conciliation_match_status(self, match_id, status, reverted_by=None,
+                                          revert_reason=None):
+        """Bug #3: Update match status (confirm/reject/revert)."""
+        reverted_at = None
+        if status == "reverted":
+            from datetime import datetime
+            reverted_at = datetime.now().isoformat(timespec="seconds")
+        self.conn.execute(
+            """UPDATE conciliation_matches
+               SET status=?, reverted_at=?, reverted_by=?, revert_reason=?
+               WHERE id=?""",
+            (status, reverted_at, reverted_by, revert_reason, match_id))
+        self.conn.commit()
+
+    def get_conciliation_session(self, session_id):
+        """Bug #3: Get a conciliation session by ID."""
+        row = self.conn.execute(
+            "SELECT * FROM conciliation_sessions WHERE id=?", (session_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_conciliation_matches(self, session_id):
+        """Bug #3: Get all matches for a conciliation session."""
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM conciliation_matches WHERE session_id=?",
+            (session_id,)).fetchall()]
+
+    def revert_conciliation_session(self, session_id, user_id=None):
+        """Bug #3: Revert all matches in a session (soft-delete / undo)."""
+        from datetime import datetime
+        now = datetime.now().isoformat(timespec="seconds")
+        self.conn.execute(
+            """UPDATE conciliation_matches
+               SET status='reverted', reverted_at=?, reverted_by=?
+               WHERE session_id=? AND status != 'reverted'""",
+            (now, user_id, session_id))
+        self.conn.execute(
+            """UPDATE conciliation_sessions
+               SET status='reverted', reverted_at=?, reverted_by=?
+               WHERE id=?""",
+            (now, user_id, session_id))
+        self.conn.commit()
 
     def list_invoices(self, tenant_id=None, limit=None,
                       categoria=None, valido=None, fecha_desde=None,

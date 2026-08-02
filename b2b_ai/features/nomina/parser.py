@@ -289,4 +289,3 @@ def parse_nomina_bytes(xml_bytes: bytes) -> Optional[NominaData]:
     data.salario_diario_integrado = _dec(_attr_strip(receptor_node, "SalarioDiarioIntegrado"))
 
     return data
-    return data

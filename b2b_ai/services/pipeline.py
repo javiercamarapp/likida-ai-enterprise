@@ -141,10 +141,22 @@ def process_file(xml_path: str, db: "Database | None" = None, tenant_id: int | N
     # 5b. Registrar en ERP DESPUÉS de persistir en DB
     if erp_res and erp_res.get("ok"):
         try:
-            # Update DB with actual ERP result
-            pass  # erp_res already computed above; update status below
-        except Exception:
-            erp_res = {"ok": False, "poliza": None, "status": "erp_failed"}
+            # Bug #8: Update DB with actual ERP result (was a no-op `pass`)
+            erp_poliza = erp_res.get("poliza", "")
+            erp_status = erp_res.get("status", "registrada")
+            db.update_invoice_erp(inv_id, erp_poliza, erp_status)
+        except Exception as e:
+            erp_res = {"ok": False, "poliza": None, "status": "erp_failed",
+                       "message": str(e)}
+
+    # Bug #9: Record agent metrics for batch monitoring
+    try:
+        db.insert_agent_metric(
+            tenant_id, "cfdi_processed", 1.0,
+            {"archivo": archivo, "categoria": clasif.get("categoria"),
+             "confianza": clasif.get("confianza"), "erp_status": erp_res.get("status") if erp_res else None})
+    except Exception:  # noqa: BLE001
+        pass  # metrics are best-effort
 
     # 6. Notificación (si aplica; no bloquea el pipeline)
     notif = {"status": "skipped"}
@@ -241,12 +253,27 @@ def process_batch(folder, db=None, tenant_id=None, pattern="*.xml",
         except Exception:
             pass
     results = []
+    _poison_count = {}  # Bug #10: track crash-per-file for poison pill
     for f in archivos:
         if f in processed_set:
+            continue
+        # Bug #10: Poison pill — skip files that crash 3+ times
+        if _poison_count.get(f, 0) >= 3:
+            results.append({"archivo": os.path.basename(f),
+                            "error": "SKIPPED: poison pill (crashed 3 times)",
+                            "poison": True})
             continue
         try:
             result = process_file(f, db=db, tenant_id=tenant_id)
             results.append(result)
+            # Bug #9: Record per-file metric
+            if db:
+                try:
+                    db.insert_agent_metric(
+                        tenant_id, "batch_file_processed", 1.0,
+                        {"file": os.path.basename(f)})
+                except Exception:  # noqa: BLE001
+                    pass
             if checkpoint_file:
                 processed_set.add(f)
                 try:
@@ -255,11 +282,31 @@ def process_batch(folder, db=None, tenant_id=None, pattern="*.xml",
                 except Exception:
                     pass
         except Exception as e:
+            _poison_count[f] = _poison_count.get(f, 0) + 1
             results.append({"archivo": os.path.basename(f), "error": str(e)})
+            # Bug #9: Record error metric
+            if db:
+                try:
+                    db.insert_agent_metric(
+                        tenant_id, "batch_file_error", 1.0,
+                        {"file": os.path.basename(f), "error": str(e)})
+                except Exception:  # noqa: BLE001
+                    pass
     if checkpoint_file and os.path.exists(checkpoint_file):
         try:
             os.remove(checkpoint_file)
         except Exception:
+            pass
+    # Bug #9: Record batch summary metric
+    if db:
+        try:
+            ok_count = sum(1 for r in results if r.get("validacion", {}).get("ok"))
+            err_count = sum(1 for r in results if "error" in r)
+            db.insert_agent_metric(
+                tenant_id, "batch_completed", len(results),
+                {"ok": ok_count, "errors": err_count,
+                 "total": len(results)})
+        except Exception:  # noqa: BLE001
             pass
     return results
 

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, date, timedelta
+from decimal import Decimal
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
 
 from b2b_ai.features.declaraciones.models import (
@@ -103,14 +105,15 @@ class DeclaracionesService(ManualProcessMixin):
             if not is_valid:
                 raise ValueError(f"Datos IVA inválidos: {'; '.join(errors)}")
 
-            iva_cobrado = float(data.get("iva_cobrado", 0))
-            iva_pagado = float(data.get("iva_pagado", 0))
+            # BUG-F15: Use Decimal for precise fiscal calculations
+            iva_cobrado = Decimal(str(data.get("iva_cobrado", 0)))
+            iva_pagado = Decimal(str(data.get("iva_pagado", 0)))
 
             iva_data = IvaData(
-                iva_cobrado=iva_cobrado,
-                iva_pagado=iva_pagado,
-                saldo_favor=max(0, iva_pagado - iva_cobrado),
-                saldo_contra=max(0, iva_cobrado - iva_pagado),
+                iva_cobrado=float(iva_cobrado),
+                iva_pagado=float(iva_pagado),
+                saldo_favor=float(max(Decimal("0"), iva_pagado - iva_cobrado)),
+                saldo_contra=float(max(Decimal("0"), iva_cobrado - iva_pagado)),
             )
             # BUG-F16: Flag IVA acreditable > 3x IVA trasladado (SAT audit risk)
             if iva_pagado > iva_cobrado * 3 and iva_cobrado > 0:
@@ -139,7 +142,9 @@ class DeclaracionesService(ManualProcessMixin):
 
         # Create deadline
         deadline_id = str(uuid.uuid4())
-        days_remaining = (deadline_date - date.today()).days
+        # BUG-F33: Use Mexico timezone for deadline calculation
+        tz_mx = ZoneInfo("America/Mexico_City")
+        days_remaining = (deadline_date - datetime.now(tz_mx).date()).days
         deadline = Deadline(
             id=deadline_id,
             tenant_id=tenant_id,
@@ -209,16 +214,17 @@ class DeclaracionesService(ManualProcessMixin):
             if not is_valid:
                 raise ValueError(f"Datos ISR inválidos: {'; '.join(errors)}")
 
-            ingresos = float(data.get("ingresos", 0))
-            deducciones = float(data.get("deducciones", 0))
-            utilidad = round(ingresos - deducciones, 2)
+            # BUG-F15: Use Decimal for precise fiscal calculations
+            ingresos = Decimal(str(data.get("ingresos", 0)))
+            deducciones = Decimal(str(data.get("deducciones", 0)))
+            utilidad = float((ingresos - deducciones).quantize(Decimal("0.01")))
             # CFF Art. 113: ISR provisional se calcula sobre utilidad (ingresos - deducciones)
             isr_calculated = self._calculate_isr_monthly(max(0, utilidad))
             pagos_provisionales = float(data.get("pagos_provisionales", 0))
 
             isr_data = IsrData(
-                ingresos=ingresos,
-                deducciones=deducciones,
+                ingresos=float(ingresos),
+                deducciones=float(deducciones),
                 utilidad=utilidad,
                 isr_calculated=isr_calculated,
                 pagos_provisionales=pagos_provisionales,
@@ -243,7 +249,9 @@ class DeclaracionesService(ManualProcessMixin):
 
         # Create deadline
         deadline_id = str(uuid.uuid4())
-        days_remaining = (deadline_date - date.today()).days
+        # BUG-F33: Use Mexico timezone for deadline calculation
+        tz_mx = ZoneInfo("America/Mexico_City")
+        days_remaining = (deadline_date - datetime.now(tz_mx).date()).days
         deadline = Deadline(
             id=deadline_id,
             tenant_id=tenant_id,
@@ -304,16 +312,17 @@ class DeclaracionesService(ManualProcessMixin):
             if not is_valid:
                 raise ValueError(f"Datos ISR inválidos: {'; '.join(errors)}")
 
-            ingresos = float(data.get("ingresos", 0))
-            deducciones = float(data.get("deducciones", 0))
-            utilidad = round(ingresos - deducciones, 2)
+            # BUG-F15: Use Decimal for precise fiscal calculations
+            ingresos = Decimal(str(data.get("ingresos", 0)))
+            deducciones = Decimal(str(data.get("deducciones", 0)))
+            utilidad = float((ingresos - deducciones).quantize(Decimal("0.01")))
             # CFF Art. 113: ISR anual se calcula sobre utilidad (ingresos - deducciones)
             isr_calculated = self._calculate_isr_annual(max(0, utilidad))
             pagos_provisionales = float(data.get("pagos_provisionales", 0))
 
             isr_data = IsrData(
-                ingresos=ingresos,
-                deducciones=deducciones,
+                ingresos=float(ingresos),
+                deducciones=float(deducciones),
                 utilidad=utilidad,
                 isr_calculated=isr_calculated,
                 pagos_provisionales=pagos_provisionales,
@@ -335,7 +344,9 @@ class DeclaracionesService(ManualProcessMixin):
 
         # Create deadline
         deadline_id = str(uuid.uuid4())
-        days_remaining = (deadline_date - date.today()).days
+        # BUG-F33: Use Mexico timezone for deadline calculation
+        tz_mx = ZoneInfo("America/Mexico_City")
+        days_remaining = (deadline_date - datetime.now(tz_mx).date()).days
         deadline = Deadline(
             id=deadline_id,
             tenant_id=tenant_id,
@@ -365,7 +376,8 @@ class DeclaracionesService(ManualProcessMixin):
         Returns list of deadlines sorted by fecha_limite ascending.
         Updates dias_restantes and estado based on current date.
         """
-        today = date.today()
+        # BUG-F33: Use Mexico timezone
+        today = datetime.now(ZoneInfo("America/Mexico_City")).date()
         deadlines = []
 
         for deadline in self._deadlines.values():
@@ -416,7 +428,8 @@ class DeclaracionesService(ManualProcessMixin):
         Returns:
             List of ReminderResult for each reminder sent
         """
-        today = date.today()
+        # BUG-F33: Use Mexico timezone
+        today = datetime.now(ZoneInfo("America/Mexico_City")).date()
         reminders = []
 
         for deadline in self._deadlines.values():

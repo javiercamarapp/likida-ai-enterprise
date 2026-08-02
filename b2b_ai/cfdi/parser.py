@@ -231,6 +231,11 @@ def parse_cfdi(xml_path):
         if _localname(node) == "CfdiRelacionado":
             relacionados.append(node.get("UUID", ""))
 
+    # BUG-F4: Detect RFC genéricos (público en general) — no deducibles
+    RFCS_GENERICOS = {"XAXX010101000", "XEXX010101000", "XAXX010101001"}
+    emisor_es_generico = emisor_d.get("rfc", "") in RFCS_GENERICOS
+    receptor_es_generico = receptor_d.get("rfc", "") in RFCS_GENERICOS
+
     # ---- Complemento de Pagos (PPD) ----
     pagos = []
     for node in root.iter():
@@ -330,8 +335,12 @@ def parse_cfdi(xml_path):
         "fecha_timbrado_dt": _iso_to_date(fecha_timbrado).isoformat()
         if _iso_to_date(fecha_timbrado) else None,
         "cfdi_relacionados": relacionados,
+        "tipo_relacion": tipo_relacion,
         "pagos": pagos,
         "nomina": nomina,
+        # BUG-F4: RFC genérico flags
+        "emisor_rfc_generico": emisor_es_generico,
+        "receptor_rfc_generico": receptor_es_generico,
         # Control de sellado
         "tiene_sello": sello_ok,
         "fechas_coherentes": fechas_validas,

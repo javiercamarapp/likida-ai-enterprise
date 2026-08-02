@@ -200,6 +200,27 @@ def validate_tipo_nomina(data: NominaData) -> List[str]:
     return errors
 
 
+def validate_montos(data: NominaData) -> List[str]:
+    """Val. 6: Montos de nómina no pueden ser cero o negativos.
+
+    BUG-F6: Salarios en cero pasan validación silenciosamente.
+    Un empleado sin salario no existe ante el IMSS (CFF Art. 27, LSS Art. 107).
+    """
+    errors: List[str] = []
+
+    if data.total_percepciones is not None and data.total_percepciones <= 0:
+        errors.append(
+            f"TotalPercepciones ({data.total_percepciones}) debe ser mayor a 0. "
+            "Un empleado sin percepciones es inválido ante el IMSS."
+        )
+    if data.salario_diario_integrado is not None and data.salario_diario_integrado <= 0:
+        errors.append(
+            f"SalarioDiarioIntegrado ({data.salario_diario_integrado}) debe ser mayor a 0. "
+            "Un empleado sin salario no existe ante el IMSS (Art. 107 LSS)."
+        )
+    return errors
+
+
 # ---------------------------------------------------------------------------
 # Validador maestro
 # ---------------------------------------------------------------------------
@@ -222,4 +243,5 @@ def validate_nomina(data: NominaData) -> List[str]:
     errors.extend(validate_num_dias_pagados(data))
     errors.extend(validate_periodicidad_pago(data))
     errors.extend(validate_tipo_nomina(data))
+    errors.extend(validate_montos(data))
     return errors
