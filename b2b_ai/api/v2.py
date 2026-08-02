@@ -38,8 +38,9 @@ import threading
 import time
 import uuid
 import os
+import gc
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import (APIRouter, Depends, HTTPException, Query)
@@ -96,12 +97,19 @@ _JOBS: dict = {}
 _JOBS_LOCK = threading.Lock()
 
 
+# BUG-F30: TTL for completed jobs (24h) — prevents memory leak
+_JOB_TTL_HOURS = 24
+
+
 def _new_job(tenant_id):
     job_id = uuid.uuid4().hex[:12]
     with _JOBS_LOCK:
+        # BUG-F30: Purge expired jobs before adding new ones
+        _purge_expired_jobs()
         _JOBS[job_id] = {"id": job_id, "tenant_id": tenant_id,
                          "status": "running", "created_at": datetime.now()
                          .isoformat(timespec="seconds"),
+                         "completed_at": None,
                          "summary": None, "results": None}
     return job_id
 
@@ -112,6 +120,37 @@ def _finish_job(job_id, summary, results):
             _JOBS[job_id]["status"] = "completed"
             _JOBS[job_id]["summary"] = summary
             _JOBS[job_id]["results"] = results
+            _JOBS[job_id]["completed_at"] = datetime.now().isoformat(timespec="seconds")
+
+
+def _purge_expired_jobs():
+    """BUG-F30: Remove completed jobs older than _JOB_TTL_HOURS.
+    
+    Must be called with _JOBS_LOCK held.
+    """
+    cutoff = datetime.now() - timedelta(hours=_JOB_TTL_HOURS)
+    expired = []
+    for job_id, job in _JOBS.items():
+        if job.get("status") in ("completed", "error"):
+            completed_at = job.get("completed_at")
+            if completed_at:
+                try:
+                    ts = datetime.fromisoformat(completed_at)
+                    if ts < cutoff:
+                        expired.append(job_id)
+                except (ValueError, TypeError):
+                    # If we can't parse the timestamp, consider it expired
+                    expired.append(job_id)
+            else:
+                # Old jobs without completed_at — mark for cleanup
+                try:
+                    created = datetime.fromisoformat(job.get("created_at", ""))
+                    if created < cutoff:
+                        expired.append(job_id)
+                except (ValueError, TypeError):
+                    pass
+    for job_id in expired:
+        del _JOBS[job_id]
 
 
 def _get_job(job_id):
