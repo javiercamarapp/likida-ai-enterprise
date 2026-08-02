@@ -34,6 +34,8 @@ from typing import Any, Dict, Optional
 from fastapi import Depends, Header, HTTPException, Request
 
 from b2b_ai.auth.roles import has_permission
+import logging as _logging
+_log = _logging.getLogger(__name__)
 
 # Token blacklist: DB-backed with in-memory fallback.
 # In production, revoked tokens are stored in the database so logout works
@@ -215,7 +217,7 @@ class JWTAuth:
                 f"CREATE TABLE IF NOT EXISTS {_BLACKLIST_TABLE} "
                 "(jti TEXT PRIMARY KEY, exp REAL NOT NULL)")
         except Exception:  # noqa: BLE001
-            pass
+            _log.debug("suppressed error in %s", __name__)
 
     # ---- Emisión ---------------------------------------------------------
     def access_token(self, user: Dict[str, Any]) -> str:
@@ -292,7 +294,7 @@ class JWTAuth:
             except HTTPException:
                 raise
             except Exception:  # noqa: BLE001 — best-effort
-                pass
+                _log.debug("suppressed error in %s", __name__)
 
         # Auditoría por request (best-effort, nunca rompe la petición).
         try:
@@ -302,7 +304,7 @@ class JWTAuth:
                          "method": request.method},
                 status="ok", tenant_id=tid)
         except Exception:  # noqa: BLE001
-            pass
+            _log.debug("suppressed error in %s", __name__)
 
         return {"user": _public_user(user), "user_id": user_id,
                 "tenant_id": tid, "role": user.get("role"),
@@ -349,7 +351,7 @@ class JWTAuth:
                 _db_ref.conn.commit()
                 return
             except Exception:  # noqa: BLE001 — fall through to memory
-                pass
+                _log.debug("suppressed error in %s", __name__)
         # In-memory fallback (thread-safe with dict operations in CPython)
         _token_blacklist[jti] = float(exp)
         now = time.time()
@@ -371,7 +373,7 @@ class JWTAuth:
                         (jti,)).fetchone()
                     return row is not None
                 except Exception:  # noqa: BLE001
-                    pass
+                    _log.debug("suppressed error in %s", __name__)
             return jti in _token_blacklist
         except JWTError:
             return True

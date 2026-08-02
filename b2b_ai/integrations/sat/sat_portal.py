@@ -116,7 +116,7 @@ class SATPortalAdapter(SATAdapter):
         3. Descargar PDF/XML con información fiscal
         """
         self._ensure_connected()
-        logger.info(f"SATPortalAdapter: consultando situación fiscal RFC {rfc}")
+        logger.info("SATPortalAdapter: consultando situacion fiscal RFC %s", rfc[:4] + "***")
 
         return RFCStatus(
             rfc=rfc,

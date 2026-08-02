@@ -477,8 +477,9 @@ def build_webhook_receiver_router(
         # Extraer signature
         signature_header = request.headers.get("conekta-signature", "")
 
-        # Procesar
+        # Procesar — pass raw_body for correct signature verification
         receiver = ConektaWebhookReceiver(db, webhook_secret)
-        return receiver.process_webhook(payload, signature_header)
+        return receiver.process_webhook(payload, signature_header,
+                                        raw_body=raw_body.decode("utf-8"))
 
     return router

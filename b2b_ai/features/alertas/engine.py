@@ -23,6 +23,9 @@ import hashlib
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+import logging as _logging
+_log = _logging.getLogger(__name__)
+
 from b2b_ai.features.alertas.models import (
     Alert,
     AlertHistory,
@@ -200,7 +203,7 @@ def _evaluate_reconciliation(data: dict, rule: AlertRule) -> bool:
         try:
             return int(mismatch_count) > 0
         except (ValueError, TypeError):
-            pass
+            _log.debug("suppressed error in %s", __name__)
     return bool(has_mismatch)
 
 

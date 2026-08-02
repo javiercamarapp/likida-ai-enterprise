@@ -129,11 +129,11 @@ class TenantManager:
         return row
 
     def _find_tenant(self, tenant_id: int) -> Optional[Dict[str, Any]]:
-        # DB-01: Point lookup by PK instead of full table scan
+        """Direct lookup by id instead of loading all tenants (N+1 fix)."""
         try:
             row = self.db.conn.execute(
-                "SELECT * FROM tenants WHERE id=?", (tenant_id,)
-            ).fetchone()
+                "SELECT id, name, rfc, created_at FROM tenants WHERE id=?",
+                (tenant_id,)).fetchone()
             return dict(row) if row else None
         except Exception:
             # Fallback for adapters without direct conn access

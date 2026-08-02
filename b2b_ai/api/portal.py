@@ -210,6 +210,9 @@ def build_portal_router(db):
         if not email or not password:
             raise HTTPException(status_code=422,
                                 detail="email y password son obligatorios.")
+        if body.tenant_id is None:
+            raise HTTPException(status_code=422,
+                                detail="tenant_id es obligatorio para el login del portal.")
         user = db.get_client_user_by_email(email, tenant_id=body.tenant_id)
         if user is None or not _check_password(password, user["password_hash"]):
             raise HTTPException(status_code=401,

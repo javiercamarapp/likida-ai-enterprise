@@ -62,7 +62,7 @@ class EcodexAdapter(SATAdapter):
         3. Recibir respuesta con UUID y timbre fiscal digital
         """
         self._ensure_connected()
-        logger.info(f"EcodexAdapter: timbrando CFDI de {cfdi_data.rfc_emisor} a {cfdi_data.rfc_receptor}")
+        logger.info("EcodexAdapter: timbrando CFDI de %s a %s", cfdi_data.rfc_emisor[:4] + "***", cfdi_data.rfc_receptor[:4] + "***")
 
         # Generar UUID simulado
         cfdi_uuid = str(_uuid.uuid4())
@@ -149,7 +149,7 @@ class EcodexAdapter(SATAdapter):
     def consultar_rfc(self, rfc: str) -> RFCStatus:
         """Simula la consulta de un RFC ante el SAT."""
         self._ensure_connected()
-        logger.info(f"EcodexAdapter: consultando RFC {rfc}")
+        logger.info("EcodexAdapter: consultando RFC %s", rfc[:4] + "***")
 
         # Mock: retornar estatus genérico
         return RFCStatus(

@@ -101,8 +101,9 @@ def build_bookkeeping_router(
     # Auto-train classifier on startup (synthetic data)
     try:
         classifier.train()
-    except Exception:
-        pass  # Graceful if sklearn not available
+    except Exception as _exc:
+        import logging as _logging
+        _logging.getLogger(__name__).debug("sklearn not available: %s", _exc)
 
     # -----------------------------------------------------------------------
     # POST /bookkeeping/process

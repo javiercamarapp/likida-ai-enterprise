@@ -25,6 +25,8 @@ from b2b_ai.features.close_management.models import (
     ERPType,
 )
 from b2b_ai.features.close_management.validation_engine import ValidationEngine
+import logging as _logging
+_log = _logging.getLogger(__name__)
 
 
 class CloseManagementRouter:
@@ -231,7 +233,7 @@ class CloseManagementRouter:
                     data["total_cfdis"] = self.db.count_invoices(tenant_id=close.tenant_id)
                     data["cfdis_procesados"] = data["total_cfdis"]
                 except Exception:
-                    pass
+                    _log.debug("suppressed error in %s", __name__)
 
             close = manager.run_automatic_steps(close_id, data)
             return {

@@ -1,151 +1,247 @@
 # -*- coding: utf-8 -*-
-"""Concurrency tests for multi-tenant isolation.
+"""Tests for multi-tenant concurrency isolation.
 
-Verifies that concurrent operations across tenants don't leak data
-and don't cause database locks or race conditions.
+Validates that concurrent operations across multiple tenants do not
+leak data between tenants (race conditions, database locks, etc.).
 """
-import os
 import threading
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import pytest
 
-
-@pytest.fixture
-def multi_tenant_db(tmp_path):
-    """Create a fresh database for concurrency tests."""
-    from b2b_ai.db.db import Database
-    db = Database(str(tmp_path / "concurrent_test.db"))
-    yield db
-    try:
-        db.close()
-    except Exception:
-        pass
+from b2b_ai.db.db import Database
 
 
-class TestConcurrentTenantIsolation:
-    """Verify data isolation under concurrent access."""
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    def test_concurrent_inserts_different_tenants(self, multi_tenant_db):
-        """Multiple threads inserting into different tenants should not mix data."""
-        db = multi_tenant_db
+def _make_db():
+    """Create a fresh in-memory DB for testing."""
+    return Database()
+
+
+def _sample_datos(i, emisor="EKU9003173C9", archivo=None):
+    """Build a minimal datos dict for insert_invoice."""
+    return {
+        "archivo": archivo or f"invoice_{i}.xml",
+        "fecha": "2024-07-15",
+        "tipo": "egreso",
+        "serie": "A",
+        "folio": str(i),
+        "folio_fiscal": f"UUID-{i:04d}",
+        "emisor_rfc": emisor,
+        "emisor_nombre": f"Empresa {i}",
+        "receptor_rfc": "XAXX010101000",
+        "subtotal": 100.0 + i,
+        "iva": 16.0,
+        "total": 116.0 + i,
+        "moneda": "MXN",
+    }
+
+
+_CLASIF = {"categoria": "gasto_operativo", "confianza": 0.95}
+_VALIDACION_OK = {"ok": True, "issues": [], "requires_human_review": False}
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+class TestConcurrentTenantCreation:
+    """Multiple threads creating tenants simultaneously."""
+
+    def test_concurrent_tenant_creation_no_crash(self):
+        """Creating N tenants in parallel should not crash or duplicate."""
+        db = _make_db()
         errors = []
-        results = {}
+        tenant_ids = []
+        lock = threading.Lock()
 
-        def insert_for_tenant(tenant_id, num_items):
+        def create_tenant(i):
             try:
-                for i in range(num_items):
-                    db.execute(
-                        "INSERT INTO invoices (tenant_id, rfc_emisor, subtotal, total, folio_fiscal) "
-                        "VALUES (?, ?, ?, ?, ?)",
-                        (tenant_id, f"RFC{tenant_id:03d}", 100.0 * (i + 1), 116.0 * (i + 1),
-                         f"UUID-{tenant_id}-{i}"),
-                    )
-                results[tenant_id] = True
+                tid = db.create_tenant(name=f"tenant_{i}", rfc=f"XAXX01010100{i % 10}")
+                with lock:
+                    tenant_ids.append(tid)
             except Exception as e:
-                errors.append((tenant_id, str(e)))
+                with lock:
+                    errors.append(str(e))
 
-        threads = []
-        for t in range(1, 6):
-            t_thread = threading.Thread(target=insert_for_tenant, args=(t, 10))
-            threads.append(t_thread)
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = [pool.submit(create_tenant, i) for i in range(20)]
+            for f in as_completed(futures):
+                f.result()
 
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
+        assert len(errors) == 0, f"Errors during concurrent creation: {errors}"
+        assert len(tenant_ids) == 20
+        # All IDs should be unique
+        assert len(set(tenant_ids)) == 20
 
-        assert len(errors) == 0, f"Concurrent insert errors: {errors}"
-        assert len(results) == 5
 
-    def test_concurrent_context_switches(self, multi_tenant_db):
-        """Switching tenant context concurrently should not leak data."""
-        db = multi_tenant_db
+class TestConcurrentInvoiceInsert:
+    """Multiple threads inserting invoices for the same tenant."""
+
+    def test_concurrent_insert_same_tenant(self):
+        """N threads inserting invoices to the same tenant should not lose data."""
+        db = _make_db()
+        tid = db.create_tenant(name="shared_tenant", rfc="XAXX010101000")
+
         errors = []
-        contexts = {}
+        inserted = []
+        lock = threading.Lock()
 
-        def use_tenant_context(tenant_id):
+        def insert_invoice(i):
             try:
-                # Simulate setting tenant context
-                ctx = {"tenant_id": tenant_id, "name": f"Tenant_{tenant_id}"}
-                # Each thread gets its own context
-                contexts[tenant_id] = ctx
-                # Simulate work
-                time.sleep(0.01)
-                assert contexts[tenant_id]["tenant_id"] == tenant_id
-            except Exception as e:
-                errors.append((tenant_id, str(e)))
-
-        threads = []
-        for t in range(1, 21):
-            t_thread = threading.Thread(target=use_tenant_context, args=(t,))
-            threads.append(t_thread)
-
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
-
-        assert len(errors) == 0, f"Context switch errors: {errors}"
-        assert len(contexts) == 20
-
-    def test_no_database_locked_under_load(self, multi_tenant_db):
-        """50 concurrent writes should not cause 'database locked' errors."""
-        db = multi_tenant_db
-        lock_errors = []
-
-        def write_record(i):
-            try:
-                db.execute(
-                    "INSERT INTO invoices (tenant_id, rfc_emisor, subtotal, total, folio_fiscal) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (1, f"RFC{i:04d}", float(i), float(i) * 1.16, f"UUID-LOAD-{i}"),
+                inv_id, was_new = db.insert_invoice(
+                    tenant_id=tid,
+                    datos=_sample_datos(i),
+                    clasif=_CLASIF,
+                    validacion=_VALIDACION_OK,
                 )
+                with lock:
+                    inserted.append(inv_id)
             except Exception as e:
-                if "locked" in str(e).lower():
-                    lock_errors.append(i)
+                with lock:
+                    errors.append(str(e))
 
-        threads = []
-        for i in range(50):
-            t = threading.Thread(target=write_record, args=(i,))
-            threads.append(t)
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = [pool.submit(insert_invoice, i) for i in range(30)]
+            for f in as_completed(futures):
+                f.result()
 
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
-
-        assert len(lock_errors) == 0, (
-            f"Database locked on {len(lock_errors)} writes: {lock_errors[:5]}..."
-        )
+        assert len(errors) == 0, f"Errors: {errors}"
+        assert len(inserted) == 30
 
 
-class TestConcurrentAPIKeyValidation:
-    """Verify API key lookups under concurrency."""
+class TestMultiTenantDataIsolation:
+    """Verify that concurrent reads/writes don't leak data across tenants."""
 
-    def test_concurrent_api_key_lookups(self, multi_tenant_db):
-        """Concurrent API key validation should return correct tenant."""
-        db = multi_tenant_db
-        results = {}
+    def test_no_data_leak_between_tenants(self):
+        """Invoices from tenant A should never appear in tenant B's results."""
+        db = _make_db()
+        tA = db.create_tenant(name="tenant_A", rfc="AAA010101AAA")
+        tB = db.create_tenant(name="tenant_B", rfc="BBB010101BBB")
+
+        # Insert 10 invoices for each tenant
+        for i in range(10):
+            db.insert_invoice(tenant_id=tA,
+                              datos=_sample_datos(i, emisor="AAA010101AAA", archivo=f"A_{i}.xml"),
+                              clasif=_CLASIF, validacion=_VALIDACION_OK)
+            db.insert_invoice(tenant_id=tB,
+                              datos=_sample_datos(i, emisor="BBB010101BBB", archivo=f"B_{i}.xml"),
+                              clasif=_CLASIF, validacion=_VALIDACION_OK)
+
+        isolation_errors = []
+
+        def read_and_verify(tenant_id, expected_prefix, iterations=20):
+            for _ in range(iterations):
+                invoices = db.list_invoices(tenant_id=tenant_id)
+                for inv in invoices:
+                    archivo = inv.get("archivo", "")
+                    if not archivo.startswith(expected_prefix):
+                        isolation_errors.append(
+                            f"Tenant {tenant_id} saw foreign invoice: {archivo}"
+                        )
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [
+                pool.submit(read_and_verify, tA, "A_"),
+                pool.submit(read_and_verify, tB, "B_"),
+                pool.submit(lambda: [
+                    db.insert_invoice(
+                        tenant_id=tA,
+                        datos=_sample_datos(100 + i, emisor="AAA010101AAA", archivo=f"A_new_{i}.xml"),
+                        clasif=_CLASIF, validacion=_VALIDACION_OK,
+                    ) for i in range(5)
+                ]),
+                pool.submit(lambda: [
+                    db.insert_invoice(
+                        tenant_id=tB,
+                        datos=_sample_datos(200 + i, emisor="BBB010101BBB", archivo=f"B_new_{i}.xml"),
+                        clasif=_CLASIF, validacion=_VALIDACION_OK,
+                    ) for i in range(5)
+                ]),
+            ]
+            for f in as_completed(futures):
+                try:
+                    f.result()
+                except Exception:
+                    pass
+
+        assert len(isolation_errors) == 0, "\n".join(isolation_errors)
+
+    def test_concurrent_stats_no_crash(self):
+        """Concurrent stats calls should not crash or return mixed data."""
+        db = _make_db()
+        tA = db.create_tenant(name="stats_A", rfc="SSA010101SSA")
+        tB = db.create_tenant(name="stats_B", rfc="SSB010101SSB")
+
+        # Insert different amounts
+        for i in range(5):
+            db.insert_invoice(tenant_id=tA,
+                              datos=_sample_datos(i, emisor="SSA010101SSA", archivo=f"a_{i}.xml"),
+                              clasif=_CLASIF, validacion=_VALIDACION_OK)
+        for i in range(3):
+            db.insert_invoice(tenant_id=tB,
+                              datos=_sample_datos(i, emisor="SSB010101SSB", archivo=f"b_{i}.xml"),
+                              clasif=_CLASIF, validacion=_VALIDACION_OK)
+
         errors = []
 
-        def validate_key(key, expected_tenant):
+        def get_stats(tenant_id, expected_count):
             try:
-                # Simulate API key validation
-                result = {"key": key, "tenant_id": expected_tenant}
-                results[key] = result
+                stats = db.invoice_stats(tenant_id=tenant_id)
+                if stats["total_facturas"] != expected_count:
+                    errors.append(
+                        f"Tenant {tenant_id}: expected {expected_count}, "
+                        f"got {stats['total_facturas']}"
+                    )
             except Exception as e:
-                errors.append((key, str(e)))
+                errors.append(f"Stats error for {tenant_id}: {e}")
 
-        threads = []
-        for i in range(20):
-            key = f"api-key-{i:03d}"
-            t = threading.Thread(target=validate_key, args=(key, i + 1))
-            threads.append(t)
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = []
+            for _ in range(10):
+                futures.append(pool.submit(get_stats, tA, 5))
+                futures.append(pool.submit(get_stats, tB, 3))
+            for f in as_completed(futures):
+                f.result()
 
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
+        assert len(errors) == 0, "\n".join(errors)
 
-        assert len(errors) == 0
-        assert len(results) == 20
+
+class TestNoSQLiteLocked:
+    """Verify that heavy concurrent writes don't cause 'database is locked'."""
+
+    def test_no_database_locked_under_load(self):
+        """50 concurrent writes should not cause SQLite lock errors."""
+        db = _make_db()
+        tid = db.create_tenant(name="load_tenant", rfc="LOA010101LOA")
+
+        lock_errors = []
+        success_count = []
+        lock = threading.Lock()
+
+        def write(i):
+            try:
+                db.insert_invoice(
+                    tenant_id=tid,
+                    datos=_sample_datos(i, archivo=f"load_{i}.xml"),
+                    clasif=_CLASIF,
+                    validacion=_VALIDACION_OK,
+                )
+                with lock:
+                    success_count.append(i)
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "locked" in err_msg:
+                    with lock:
+                        lock_errors.append(f"iteration {i}: {e}")
+
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            futures = [pool.submit(write, i) for i in range(50)]
+            for f in as_completed(futures):
+                f.result()
+
+        assert len(lock_errors) == 0, f"Database locked errors: {lock_errors}"
+        assert len(success_count) == 50

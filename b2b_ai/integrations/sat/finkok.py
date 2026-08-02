@@ -62,7 +62,7 @@ class FinkokAdapter(SATAdapter):
         4. Recibir respuesta con UUID y complemento de timbre
         """
         self._ensure_connected()
-        logger.info(f"FinkokAdapter: timbrando CFDI de {cfdi_data.rfc_emisor} a {cfdi_data.rfc_receptor}")
+        logger.info("FinkokAdapter: timbrando CFDI de %s a %s", cfdi_data.rfc_emisor[:4] + "***", cfdi_data.rfc_receptor[:4] + "***")
 
         cfdi_uuid = str(_uuid.uuid4())
         now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -140,7 +140,7 @@ class FinkokAdapter(SATAdapter):
     def consultar_rfc(self, rfc: str) -> RFCStatus:
         """Simula la consulta de un RFC ante el SAT."""
         self._ensure_connected()
-        logger.info(f"FinkokAdapter: consultando RFC {rfc}")
+        logger.info("FinkokAdapter: consultando RFC %s", rfc[:4] + "***")
 
         return RFCStatus(
             rfc=rfc,

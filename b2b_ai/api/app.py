@@ -120,7 +120,7 @@ from b2b_ai.api.rate_limiter import install_enterprise_rate_limit
 from b2b_ai.api.openapi_docs import install_openapi_docs
 from b2b_ai.api.versioning import install_versioning
 from b2b_ai.infrastructure.graceful_shutdown import (
-    GracefulShutdownHandler, request_tracker, is_draining)
+    ShutdownManager, RequestTracker, is_draining)
 from b2b_ai.infrastructure.health import (
     HealthCheckRegistry, database_health_check)
 from b2b_ai.features.reconciliation_agent.routes import build_reconcile_agent_router
@@ -485,11 +485,16 @@ def create_app(db=None):
         # de esa reconfiguración y garantiza que el JSON log quede activo.
         get_structured_logger("api")
 
+        # Graceful shutdown: register signal handlers and drain period.
+        _shutdown_mgr = ShutdownManager()
+        _shutdown_mgr.install_signal_handlers()
+
         yield
 
-        # --- shutdown: liberar pools de conexiones y recursos ---
+        # --- shutdown: graceful drain + cleanup ---
         _structured_log.info("shutdown_cleanup", extra={
             "detail": "Cerrando pools de conexiones y recursos..."})
+        _shutdown_mgr._cleanup_phase()
         # Cerrar el pool PostgreSQL compartido (si existe).
         try:
             from b2b_ai.db.db import _PG_POOLS
@@ -666,6 +671,23 @@ def create_app(db=None):
             "total_requests": metrics.total_requests(),
         }
 
+    # Health check registry for liveness/readiness probes.
+    _health_registry = HealthCheckRegistry()
+    _health_registry.register("database", database_health_check(db))
+
+    @app.get("/health/live")
+    def health_live():
+        """Liveness probe: is the process alive? No DB dependency."""
+        return _health_registry.liveness()
+
+    @app.get("/health/ready")
+    def health_ready():
+        """Readiness probe: can the service handle traffic? Checks DB."""
+        body, status_code = _health_registry.readiness(
+            critical_components=["database"])
+        from fastapi.responses import JSONResponse
+        return JSONResponse(content=body, status_code=status_code)
+
     @app.get("/metrics")
     def metrics_endpoint(auth_info: dict = Depends(require_api_key)):
         """Métricas operativas básicas (request count, latencia por ruta,
@@ -673,10 +695,16 @@ def create_app(db=None):
         return metrics.snapshot()
 
     @app.get("/metrics/prometheus")
-    def metrics_prometheus():
-        """Métricas en formato Prometheus text exposition (operativas, de
-        negocio y custom por tenant). Público, exento de rate-limit y de CORS
-        para que Prometheus pueda scrapearlo sin auth."""
+    def metrics_prometheus(request: Request):
+        """Métricas en formato Prometheus text exposition. Protegido por
+        IP allowlist (B2B_PROMETHEUS_IPS) o API key para restringir acceso."""
+        # Restrict to monitoring IPs or require API key
+        allowed_ips = os.environ.get("B2B_PROMETHEUS_IPS", "").strip()
+        if allowed_ips:
+            client_ip = _client_ip(request)
+            allowed_set = {ip.strip() for ip in allowed_ips.split(",") if ip.strip()}
+            if client_ip not in allowed_set:
+                raise HTTPException(403, "Metrics endpoint restricted to monitoring IPs.")
         from fastapi.responses import PlainTextResponse
         prom_metrics.set_tenant_usage(db.get_all_usage())
         return PlainTextResponse(prom_metrics.render_prometheus(),
@@ -1147,10 +1175,32 @@ def create_app(db=None):
     _DASHBOARD_SPA = Path(__file__).resolve().parent / "static" / "dashboard.html"
 
     @app.get("/dashboard/", include_in_schema=False)
-    def dashboard_spa():
-        """Panel gerencial interactivo (HTML+JS vanilla)."""
+    def dashboard_spa(request: Request):
+        """Panel gerencial interactivo (HTML+JS vanilla). Requiere sesión."""
         if not _DASHBOARD_SPA.is_file():
             raise HTTPException(404, "Dashboard SPA no disponible.")
+        # Require portal session or API key for dashboard access
+        portal_token = None
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            portal_token = auth_header.split(" ", 1)[1].strip()
+        if not portal_token:
+            portal_token = request.headers.get("x-portal-token")
+        if not portal_token:
+            portal_token = request.cookies.get("portal_token")
+        if not portal_token:
+            # Also accept API key
+            api_key = request.headers.get("x-api-key")
+            if not api_key:
+                raise HTTPException(401, "Se requiere sesión para acceder al dashboard.")
+            try:
+                auth.resolve(api_key)
+            except Exception:
+                raise HTTPException(401, "API key inválida.")
+        else:
+            session = db.get_portal_session(portal_token)
+            if session is None:
+                raise HTTPException(401, "Sesión inválida o caducada.")
         return FileResponse(_DASHBOARD_SPA)
 
     # ------------------------------------------------------------------ #
@@ -1630,6 +1680,9 @@ def create_app(db=None):
 
     # Enterprise OpenAPI docs: error schemas, auth flows, webhook examples.
     install_openapi_docs(app)
+
+    # Versioning middleware: RFC 8594 Deprecation + Sunset headers.
+    install_versioning(app)
 
     return app
 

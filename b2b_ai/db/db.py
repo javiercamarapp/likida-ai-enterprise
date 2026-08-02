@@ -435,12 +435,18 @@ class Database:
         q += f" ORDER BY id DESC LIMIT {int(limit)}"
         return [dict(r) for r in self.conn.execute(q, params).fetchall()]
 
-    def count_audit(self, tool_name=None):
+    def count_audit(self, tool_name=None, tenant_id=None):
         q = "SELECT COUNT(*) FROM audit_log"
         params = []
+        clauses = []
+        if tenant_id is not None:
+            clauses.append("tenant_id=?")
+            params.append(tenant_id)
         if tool_name:
-            q += " WHERE tool_name=?"
+            clauses.append("tool_name=?")
             params.append(tool_name)
+        if clauses:
+            q += " WHERE " + " AND ".join(clauses)
         return self.conn.execute(q, params).fetchone()[0]
 
     # ---- Billing (FASE cobros) ----
@@ -1043,9 +1049,9 @@ class Database:
         'cancelled'). `paused=True` marca paused_at cuando se pausa."""
         if paused:
             self.conn.execute(
-                "UPDATE outreach_campaigns SET status=?, paused_at=?"
+                "UPDATE outreach_campaigns SET status=?, paused_at=CURRENT_TIMESTAMP"
                 " WHERE id=?",
-                (status, "CURRENT_TIMESTAMP", campaign_id))
+                (status, campaign_id))
         else:
             self.conn.execute(
                 "UPDATE outreach_campaigns SET status=? WHERE id=?",

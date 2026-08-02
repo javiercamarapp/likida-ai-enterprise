@@ -34,6 +34,8 @@ from b2b_ai.features.reconciliation_agent.models import (
 from b2b_ai.features.reconciliation_agent.parsers import BankStatementParser
 from b2b_ai.features.reconciliation_agent.matching_engine import MatchingEngine
 from b2b_ai.features.reconciliation_agent.alerts import AlertEngine
+import logging as _logging
+_log = _logging.getLogger(__name__)
 
 
 def _job_to_status(row: dict) -> ReconciliationStatus:
@@ -234,7 +236,7 @@ class ReconcileAgentRouter:
                 try:
                     os.unlink(tmp_path)
                 except OSError:
-                    pass
+                    _log.debug("suppressed error in %s", __name__)
 
         # -- status ----------------------------------------------------------
         @router.get(
@@ -336,7 +338,7 @@ class ReconcileAgentRouter:
                             tenant_id=tenant,
                         )
                     except Exception:
-                        pass
+                        _log.debug("suppressed error in %s", __name__)
 
                 return {
                     "ok": True,
@@ -357,7 +359,7 @@ class ReconcileAgentRouter:
                             tenant_id=tenant,
                         )
                     except Exception:
-                        pass
+                        _log.debug("suppressed error in %s", __name__)
 
                 return {
                     "ok": True,

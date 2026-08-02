@@ -109,7 +109,7 @@ class PAXFACTURASAdapter(SATAdapter):
     def consultar_rfc(self, rfc: str) -> RFCStatus:
         """Consulta el estatus de un RFC ante el SAT."""
         self._ensure_connected()
-        logger.info(f"{self.name}: consultando RFC {rfc} (mock)")
+        logger.info("%s: consultando RFC %s (mock)", self.name, rfc[:4] + "***")
 
         return RFCStatus(
             rfc=rfc,

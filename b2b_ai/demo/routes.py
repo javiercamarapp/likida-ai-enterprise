@@ -28,6 +28,9 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse
 
+import logging as _logging
+_log = _logging.getLogger(__name__)
+
 from b2b_ai.demo.mock_data import (
     DEMO_CFDI_SAMPLES,
     DEMO_STATS,
@@ -131,11 +134,11 @@ def mount_demo_routes(app) -> None:
             try:
                 total_monto += float(str(result["datos"]["total"]).replace(",", ""))
             except (TypeError, ValueError):
-                pass
+                _log.debug("suppressed error in %s", __name__)
             try:
                 total_iva += float(str(result["datos"].get("iva", 0)).replace(",", ""))
             except (TypeError, ValueError):
-                pass
+                _log.debug("suppressed error in %s", __name__)
             cat = result["clasificacion"]["categoria"]
             cats[cat] = cats.get(cat, 0) + 1
 

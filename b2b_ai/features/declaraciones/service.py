@@ -41,6 +41,9 @@ from b2b_ai.features.compliance import (
     FiscalOutput, AuditTrail, sanitize_string, mask_rfc,
     verify_tenant_access, SafeError, SAFE_ERRORS, ManualProcessMixin,
 )
+import logging as _logging
+_log = _logging.getLogger(__name__)
+
 from b2b_ai.fiscal_tables import (
     ISR_MENSUAL_2025 as ISR_TABLE_MONTHLY,
     ISR_ANUAL_2025 as ISR_TABLE_ANNUAL,
@@ -390,7 +393,7 @@ class DeclaracionesService(ManualProcessMixin):
                 else:
                     deadline.estado = DeadlineStatus.PENDING
             except (ValueError, TypeError):
-                pass
+                _log.debug("suppressed error in %s", __name__)
 
             deadlines.append(deadline)
 

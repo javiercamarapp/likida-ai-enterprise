@@ -14,6 +14,9 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+import logging as _logging
+_log = _logging.getLogger(__name__)
+
 from b2b_ai.features.dashboard.models import (
     ClientSummary,
     DailyMetric,
@@ -73,7 +76,7 @@ class DashboardService:
                     revenue_mrr += _plan_to_mrr(sub.get("plan", ""))
                     total_revenue += revenue_mrr  # approximation
         except Exception:  # noqa: BLE001
-            pass
+            _log.debug("suppressed error in %s", __name__)
 
         # System status
         system_status = "healthy"
@@ -83,7 +86,7 @@ class DashboardService:
             if audit_total > 0 and audit_errors / max(audit_total, 1) > 0.1:
                 system_status = "degraded"
         except Exception:  # noqa: BLE001
-            pass
+            _log.debug("suppressed error in %s", __name__)
 
         return DashboardOverview(
             total_clients=total_clients,
@@ -255,7 +258,7 @@ class DashboardService:
             try:
                 db_size_mb = round(os.path.getsize(db_path) / (1024 * 1024), 2)
             except OSError:
-                pass
+                _log.debug("suppressed error in %s", __name__)
 
         # Error rate (last 24h): count audit errors vs total
         error_rate = 0.0
@@ -266,7 +269,7 @@ class DashboardService:
             if audit_total > 0:
                 error_rate = round(audit_errors / audit_total, 4)
         except Exception:  # noqa: BLE001
-            pass
+            _log.debug("suppressed error in %s", __name__)
 
         # API uptime: estimate from error rate (inverse)
         api_uptime = round(max(0, 1.0 - error_rate) * 100, 2)
@@ -328,7 +331,7 @@ class DashboardService:
                     t1 = datetime.fromisoformat(str(processed).replace("Z", "+00:00"))
                     processing_times.append(max(0.0, (t1 - t0).total_seconds()))
                 except (ValueError, TypeError):
-                    pass
+                    _log.debug("suppressed error in %s", __name__)
 
         # Fill in missing days with zeros
         cfdi_daily = []
@@ -357,7 +360,7 @@ class DashboardService:
             # Count LLM calls from audit
             llm_calls = self._db.count_audit(tool_name="llm")
         except Exception:  # noqa: BLE001
-            pass
+            _log.debug("suppressed error in %s", __name__)
 
         return UsageMetrics(
             total_api_calls=total_api_calls,
@@ -394,7 +397,7 @@ class DashboardService:
                     plan_breakdown[plan] += 1
                     revenue_mrr += _plan_to_mrr(plan)
         except Exception:  # noqa: BLE001
-            pass
+            _log.debug("suppressed error in %s", __name__)
 
         arr = revenue_mrr * 12
         total_clients = len(tenants)
