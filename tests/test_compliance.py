@@ -113,20 +113,22 @@ class TestISR:
         assert abs(isr - 1.92) < 0.01
 
     def test_isr_second_bracket(self):
-        # 1000 in bracket (312.42-2636.28): (1000-312.42)*6.4% + 5.99
-        expected = (1000 - 312.42) * 0.0640 + 5.99
+        # 1000 in 2025 bracket (416.35-3508.42): (1000-416.35)*6.4% + 7.99
+        expected = (1000 - 416.35) * 0.0640 + 7.99
         isr = calculate_isr(1000.0)
         assert abs(isr - round(expected, 2)) < 0.01
 
     def test_isr_high_income(self):
-        # 100000 in bracket (68821.63, inf): (100000-68821.63)*0.35 + 20557.10
-        expected = (100000 - 68821.63) * 0.35 + 20557.10
+        # 100000 in 2025 bracket (91351.49, inf): (100000-91351.49)*0.35 + 27285.41
+        expected = (100000 - 91351.49) * 0.35 + 27285.41
         isr = calculate_isr(100000.0)
         assert abs(isr - round(expected, 2)) < 0.01
 
     def test_isr_annual(self):
         isr_annual = calculate_isr(500000.0, annual=True)
+        # 500000 in 2025 annual top bracket
         assert isr_annual > 0
+        assert isr_annual > 100000
 
 
 class TestIVA:
