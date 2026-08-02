@@ -703,6 +703,95 @@ MIGRATIONS = [
         ALTER TABLE client_users ADD COLUMN accepted_privacy_at TIMESTAMP;
         """,
     },
+    {
+        "version": 16,
+        "name": "conciliation_persistence_agent_metrics_poison_pill",
+        "sql": """
+        -- Bug #3: Conciliación persistente con audit trail y rollback.
+        -- Sesión de conciliación: quién, cuándo, qué criterios usó.
+        CREATE TABLE IF NOT EXISTS conciliation_sessions (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            user_id TEXT,
+            criteria TEXT,
+            date_tolerance_days INTEGER DEFAULT 3,
+            discrepancy_threshold REAL DEFAULT 0.02,
+            amount_tolerance REAL DEFAULT 0.01,
+            status TEXT DEFAULT 'active',
+            total_matches INTEGER DEFAULT 0,
+            confirmed_matches INTEGER DEFAULT 0,
+            rejected_matches INTEGER DEFAULT 0,
+            reverted_at TIMESTAMP,
+            reverted_by TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_conc_sess_tenant
+            ON conciliation_sessions(tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_conc_sess_status
+            ON conciliation_sessions(status);
+
+        -- Matches individuales: cada par banco ↔ póliza con estado y auditoría.
+        CREATE TABLE IF NOT EXISTS conciliation_matches (
+            id INTEGER PRIMARY KEY,
+            session_id INTEGER NOT NULL REFERENCES conciliation_sessions(id),
+            tenant_id INTEGER NOT NULL,
+            bank_transaction_id TEXT NOT NULL,
+            poliza_id TEXT,
+            cfdi_uuid TEXT,
+            match_type TEXT NOT NULL,
+            confidence_score REAL NOT NULL,
+            status TEXT DEFAULT 'proposed',
+            reverted_at TIMESTAMP,
+            reverted_by TEXT,
+            revert_reason TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_conc_match_session
+            ON conciliation_matches(session_id);
+        CREATE INDEX IF NOT EXISTS idx_conc_match_tenant
+            ON conciliation_matches(tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_conc_match_status
+            ON conciliation_matches(status);
+
+        -- Bug #9: Métricas del agente (no HTTP) para batch monitoring.
+        CREATE TABLE IF NOT EXISTS agent_metrics (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER,
+            event_type TEXT NOT NULL,
+            value REAL,
+            metadata TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_metrics_tenant
+            ON agent_metrics(tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_agent_metrics_type
+            ON agent_metrics(event_type);
+        CREATE INDEX IF NOT EXISTS idx_agent_metrics_ts
+            ON agent_metrics(created_at);
+
+        -- Bug #10: Job queue persistente para recovery post-crash.
+        CREATE TABLE IF NOT EXISTS job_queue (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER,
+            job_type TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            status TEXT DEFAULT 'pending',
+            attempts INTEGER DEFAULT 0,
+            max_attempts INTEGER DEFAULT 3,
+            last_error TEXT,
+            poison INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_job_queue_status
+            ON job_queue(status);
+        CREATE INDEX IF NOT EXISTS idx_job_queue_tenant
+            ON job_queue(tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_job_queue_poison
+            ON job_queue(poison);
+        """,
+    },
 ]
 
 

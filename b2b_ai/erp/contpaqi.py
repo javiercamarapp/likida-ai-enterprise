@@ -13,19 +13,28 @@ No se toca credenciales aquí; el mock solo sirve para testear el flujo.
 """
 from __future__ import annotations
 
+import threading
 import uuid
+from collections import OrderedDict
 from datetime import datetime
 
 from b2b_ai.erp.base import ERPInterface
 
+# Bug #5: LRU max size for _polizas to prevent unbounded memory growth
+_POLIZAS_MAX_SIZE = 1000
+
 
 class MockCONTPAQi(ERPInterface):
-    """Implementación simulada de la API de CONTPAQi en memoria."""
+    """Implementación simulada de la API de CONTPAQi en memoria.
+
+    Thread-safe con lock interno (Bug #7) y LRU eviction (Bug #5).
+    """
 
     backend = "CONTPAQi (mock)"
 
     def __init__(self):
-        self._polizas = {}
+        self._polizas: OrderedDict = OrderedDict()
+        self._lock = threading.Lock()  # Bug #7: thread-safe dict access
 
     def register_invoice(self, invoice):
         folio = invoice.get("folio_fiscal") or invoice.get("archivo")
@@ -33,32 +42,39 @@ class MockCONTPAQi(ERPInterface):
             return {"ok": False, "poliza": None, "status": "error",
                     "message": "Sin folio fiscal para registrar."}
 
-        # [34][39] Idempotente: si ya existe, devolver la póliza existente.
-        existing = self._polizas.get(folio)
-        if existing:
-            return {
-                "ok": True, "poliza": existing["poliza"],
-                "cuenta_cargo": existing["cuenta_cargo"],
-                "cuenta_abono": existing["cuenta_abono"],
-                "status": "registrada", "duplicate": True,
-                "message": f"Factura {folio} ya registrada (idempotente).",
+        with self._lock:
+            # [34][39] Idempotente: si ya existe, devolver la póliza existente.
+            existing = self._polizas.get(folio)
+            if existing:
+                # Move to end for LRU
+                self._polizas.move_to_end(folio)
+                return {
+                    "ok": True, "poliza": existing["poliza"],
+                    "cuenta_cargo": existing["cuenta_cargo"],
+                    "cuenta_abono": existing["cuenta_abono"],
+                    "status": "registrada", "duplicate": True,
+                    "message": f"Factura {folio} ya registrada (idempotente).",
+                }
+
+            poliza_id = "POL-" + uuid.uuid4().hex[:10].upper()
+            categoria = invoice.get("categoria", "desconocido")
+            cuenta_cargo, cuenta_abono = _cuentas_para_categoria(categoria)
+
+            # Bug #5: LRU eviction — drop oldest entry if at capacity
+            if len(self._polizas) >= _POLIZAS_MAX_SIZE:
+                self._polizas.popitem(last=False)
+
+            self._polizas[folio] = {
+                "poliza": poliza_id,
+                "folio_fiscal": folio,
+                "emisor": invoice.get("emisor_rfc", ""),
+                "total": invoice.get("total"),
+                "categoria": categoria,
+                "cuenta_cargo": cuenta_cargo,
+                "cuenta_abono": cuenta_abono,
+                "fecha_registro": datetime.now().isoformat(timespec="seconds"),
+                "status": "registrada",
             }
-
-        poliza_id = "POL-" + uuid.uuid4().hex[:10].upper()
-        categoria = invoice.get("categoria", "desconocido")
-        cuenta_cargo, cuenta_abono = _cuentas_para_categoria(categoria)
-
-        self._polizas[folio] = {
-            "poliza": poliza_id,
-            "folio_fiscal": folio,
-            "emisor": invoice.get("emisor_rfc", ""),
-            "total": invoice.get("total"),
-            "categoria": categoria,
-            "cuenta_cargo": cuenta_cargo,
-            "cuenta_abono": cuenta_abono,
-            "fecha_registro": datetime.now().isoformat(timespec="seconds"),
-            "status": "registrada",
-        }
         return {
             "ok": True,
             "poliza": poliza_id,
@@ -69,8 +85,9 @@ class MockCONTPAQi(ERPInterface):
         }
 
     def get_invoice(self, folio_fiscal):
-        p = self._polizas.get(folio_fiscal)
-        return dict(p) if p else None
+        with self._lock:
+            p = self._polizas.get(folio_fiscal)
+            return dict(p) if p else None
 
     def health(self):
         return {"ok": True, "backend": self.backend,

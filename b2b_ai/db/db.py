@@ -131,9 +131,31 @@ class Database:
             self._local.conn = conn
             with self._conn_lock:
                 self._connections.add(conn)
+                # Bug #5: Cleanup stale connections from recycled threads
+                self._cleanup_stale_connections()
             # Migraciones idempotentes por conexión nueva (CREATE IF NOT EXISTS).
             self.migrate()
         return conn
+
+    def _cleanup_stale_connections(self):
+        """Remove connections whose owning thread has died (Bug #5).
+
+        Called under _conn_lock. Tests that the connection is still usable;
+        silently discards broken/closed ones.
+        """
+        stale = []
+        for c in self._connections:
+            try:
+                # Quick liveness check
+                c.execute("SELECT 1")
+            except Exception:  # noqa: BLE001
+                stale.append(c)
+        for c in stale:
+            self._connections.discard(c)
+            try:
+                c.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _pg_conn(self):
         """Conexión PostgreSQL del hilo actual, checada del pool compartido."""
@@ -316,6 +338,86 @@ class Database:
                   row["razon_clasificacion"]))
         self.conn.commit()
         return invoice_id, inserted
+
+    def update_invoice_erp(self, invoice_id, erp_poliza, erp_status, status=None):
+        """Bug #8: Update ERP registration result after initial DB insert.
+
+        Called after ERP registration succeeds/fails to keep DB in sync.
+        """
+        if invoice_id is None:
+            return False
+        final_status = status or ("registered" if erp_status == "registrada" else erp_status)
+        cur = self.conn.execute(
+            "UPDATE invoices SET erp_poliza=?, erp_status=?, status=? WHERE id=?",
+            (erp_poliza or "", erp_status or "", final_status, invoice_id))
+        self.conn.commit()
+        self._bump_version()
+        return cur.rowcount > 0
+
+    def insert_agent_metric(self, tenant_id, event_type, value=None, metadata=None):
+        """Bug #9: Record an agent metric for batch monitoring."""
+        import json as _json
+        meta_txt = _json.dumps(metadata, default=str, ensure_ascii=False) if metadata else None
+        self.conn.execute(
+            "INSERT INTO agent_metrics(tenant_id, event_type, value, metadata) VALUES (?,?,?,?)",
+            (tenant_id, event_type, value, meta_txt))
+        self.conn.commit()
+
+    def enqueue_job(self, tenant_id, job_type, payload, max_attempts=3):
+        """Bug #10: Enqueue a job to the persistent job queue."""
+        import json as _json
+        payload_txt = _json.dumps(payload, default=str, ensure_ascii=False)
+        cur = self.conn.execute(
+            "INSERT INTO job_queue(tenant_id, job_type, payload, max_attempts) VALUES (?,?,?,?)",
+            (tenant_id, job_type, payload_txt, max_attempts))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def dequeue_job(self, job_type=None):
+        """Bug #10: Dequeue the next pending job (non-poison)."""
+        q = "SELECT * FROM job_queue WHERE status='pending' AND poison=0"
+        params = []
+        if job_type:
+            q += " AND job_type=?"
+            params.append(job_type)
+        q += " ORDER BY id ASC LIMIT 1"
+        row = self.conn.execute(q, params).fetchone()
+        if row:
+            self.conn.execute(
+                "UPDATE job_queue SET status='running', started_at=CURRENT_TIMESTAMP WHERE id=?",
+                (row["id"],))
+            self.conn.commit()
+        return dict(row) if row else None
+
+    def complete_job(self, job_id):
+        """Bug #10: Mark a job as completed."""
+        self.conn.execute(
+            "UPDATE job_queue SET status='completed', completed_at=CURRENT_TIMESTAMP WHERE id=?",
+            (job_id,))
+        self.conn.commit()
+
+    def fail_job(self, job_id, error_msg):
+        """Bug #10: Mark a job as failed; poison pill after max_attempts."""
+        import json as _json
+        row = self.conn.execute("SELECT attempts, max_attempts FROM job_queue WHERE id=?",
+                                (job_id,)).fetchone()
+        if not row:
+            return
+        attempts = row["attempts"] + 1
+        max_att = row["max_attempts"]
+        is_poison = 1 if attempts >= max_att else 0
+        new_status = "poison" if is_poison else "failed"
+        self.conn.execute(
+            "UPDATE job_queue SET status=?, attempts=?, last_error=?, poison=? WHERE id=?",
+            (new_status, attempts, error_msg, is_poison, job_id))
+        self.conn.commit()
+
+    def get_pending_job_count(self):
+        """Bug #10: Count of pending jobs (for dead man's switch)."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM job_queue WHERE status='pending' AND poison=0"
+        ).fetchone()
+        return row[0] if row else 0
 
     def list_invoices(self, tenant_id=None, limit=None,
                       categoria=None, valido=None, fecha_desde=None,
