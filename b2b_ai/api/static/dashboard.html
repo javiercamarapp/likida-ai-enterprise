@@ -97,6 +97,14 @@ const API_KEY = params.get('api_key') || '';
 const BASE = '/api/v1/dashboard';
 let charts = {};
 
+// API key from query param → header-only. If present in URL, strip it from
+// the address bar to avoid leaking credentials in history/bookmarks/logs.
+if (params.has('api_key')) {
+  params.delete('api_key');
+  const clean = params.toString();
+  history.replaceState(null, '', location.pathname + (clean ? '?' + clean : ''));
+}
+
 function hdr(){
   const h = {'Content-Type':'application/json'};
   if(API_KEY) h['X-API-Key'] = API_KEY;

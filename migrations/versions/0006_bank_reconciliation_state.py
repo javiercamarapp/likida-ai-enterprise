@@ -1,7 +1,7 @@
-"""estado de conciliación bancaria persistido por tenant
+"""estado de conciliacion bancaria persistido por tenant
 
-Revision ID: 0005_bank_reconciliation_state
-Revises: 0004_audit_feature_flags
+Revision ID: 0006_bank_reconciliation_state
+Revises: 0005_outstanding_unique
 Create Date: 2026-08-01
 
 Equivalente en PostgreSQL de la migración SQLite 13 (`b2b_ai/db/models.py`).
@@ -16,7 +16,7 @@ recalculan en cada petición.
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0005_bank_reconciliation_state"
+revision = "0006_bank_reconciliation_state"
 down_revision = "0005_outstanding_unique"
 branch_labels = None
 depends_on = None

@@ -25,13 +25,31 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
+import logging as _logging
+
 import bcrypt
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from b2b_ai.services.pipeline import process_file
 
+_csrf_log = _logging.getLogger("portal")
+
 SESSION_TTL_DAYS = 30
+_PORTAL_CSRF_COOKIE = "portal_csrf"
+_SESSION_COOKIE = "portal_session"
+
+def _generate_csrf_token() -> str:
+    import secrets as _secrets
+    return _secrets.token_urlsafe(32)
+
+def _set_session_cookie(response: Response, token: str) -> None:
+    max_age = SESSION_TTL_DAYS * 86400
+    response.set_cookie(
+        key=_SESSION_COOKIE, value=token, max_age=max_age,
+        httponly=True, secure=True, samesite="strict", path="/portal",
+    )
 _PORTAL_STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "static", "portal.html")
 
@@ -122,12 +140,17 @@ JOBS = _JobStore()
 # Auth dependency
 # --------------------------------------------------------------------------
 def _extract_token(
-    authorization: Optional[str] = Header(default=None),
+    request: Request,
+    authorization: str = Header(default=None),
     x_portal_token: Optional[str] = Header(default=None),
 ) -> Optional[str]:
+    """Extract session token from Authorization header, X-Portal-Token header,
+    or HttpOnly cookie (preferred for browser clients)."""
     if authorization and authorization.lower().startswith("bearer "):
         return authorization.split(" ", 1)[1].strip()
-    return x_portal_token
+    if x_portal_token:
+        return x_portal_token
+    return request.cookies.get(_SESSION_COOKIE)
 
 
 def _require_user(db):
@@ -178,9 +201,10 @@ def build_portal_router(db):
 
     # ---- Auth ------------------------------------------------------------
     @router.post("/auth/login")
-    def portal_login(body: PortalLogin):
+    def portal_login(body: PortalLogin, response: Response = None):
         """Autentica un cliente por email+password (bcrypt) y devuelve un
-        token de sesión multi-tenant."""
+        token de sesion multi-tenant. El token se entrega como HttpOnly
+        cookie (anti-XSS) Y en el body JSON (compatibilidad SPA)."""
         email = (body.email or "").strip().lower()
         password = body.password or ""
         if not email or not password:
@@ -189,9 +213,11 @@ def build_portal_router(db):
         user = db.get_client_user_by_email(email, tenant_id=body.tenant_id)
         if user is None or not _check_password(password, user["password_hash"]):
             raise HTTPException(status_code=401,
-                                detail="Credenciales inválidas.")
+                                detail="Credenciales invalidas.")
         token = _new_token()
         db.create_portal_session(user["id"], token, _expires())
+        if response is not None:
+            _set_session_cookie(response, token)
         return {
             "token": token,
             "user": {"id": user["id"], "email": user["email"],
@@ -202,43 +228,30 @@ def build_portal_router(db):
 
     @router.post("/auth/magic-link")
     def portal_magic_link(body: PortalMagicLink, request: Request):
-        """Emite una sesión sin password y la 'envía' por email.
+        """Emite una sesion sin password y la envia por email.
 
-        NUNCA devuelve el token en la respuesta HTTP (salvo B2B_ENV=dev).
-        En producción el token se envía exclusivamente por email.
+        NUNCA devuelve el token en la respuesta HTTP.
+        Siempre devuelve 200 con mensaje generico (anti-enumeracion).
         """
         email = (body.email or "").strip().lower()
         if not email:
             raise HTTPException(status_code=422, detail="email es obligatorio.")
         user = db.get_client_user_by_email(email)
-        if user is None:
-            # No revelamos si el email existe (evita enumeración de cuentas).
-            raise HTTPException(status_code=404,
-                                detail="No hay una cuenta con ese email.")
-        token = _new_token()
-        db.create_portal_session(user["id"], token, _expires())
-        # Envío real: enviamos el enlace por email (mock: registry).
-        try:
-            db.insert_notification(
-                user["tenant_id"], "portal_magic_link", "email",
-                email, "Tu enlace de acceso al portal Likida AI",
-                "Haz clic en el enlace para acceder a tu portal.",
-                status="sent")
-        except Exception:  # noqa: BLE001
-            pass
-        resp: dict = {"ok": True,
-                       "message": "Te enviamos un enlace de acceso por email.",
-                       "expires_at": _expires()}
-        # SOLO en dev: devolver token para testing del SPA.
-        _dev_envs = {"dev", "development", "test", "testing", "local"}
-        if os.environ.get("B2B_ENV", "").strip().lower() in _dev_envs:
-            resp["dev_token"] = token
-            import logging
-            logging.getLogger("portal").warning(
-                "MAGIC-LINK dev_token returned in HTTP response "
-                "(B2B_ENV=%s) — REMOVE before production",
-                os.environ.get("B2B_ENV"))
-        return resp
+        if user is not None:
+            token = _new_token()
+            db.create_portal_session(user["id"], token, _expires())
+            try:
+                db.insert_notification(
+                    user["tenant_id"], "portal_magic_link", "email",
+                    email, "Tu enlace de acceso al portal Likida AI",
+                    "Haz clic en el enlace para acceder a tu portal.",
+                    status="sent")
+            except Exception as exc:
+                _csrf_log.warning("Failed to insert magic-link notification: %s", exc)
+        # Siempre devolver 200 generico -- no revelar si el email existe.
+        return {"ok": True,
+                "message": "Si existe una cuenta con ese email, recibir\u00e1s un enlace de acceso.",
+                "expires_at": _expires()}
 
     @router.post("/auth/confirm")
     def portal_confirm(body: PortalTokenRequest):
@@ -255,15 +268,17 @@ def build_portal_router(db):
         }
 
     @router.post("/auth/logout")
-    def portal_logout(user: dict = Depends(require_user)):
+    def portal_logout(user: dict = Depends(require_user), response: Response = None):
         db.delete_portal_session(user["token"])
         # Revoke JWT if present
         try:
             from b2b_ai.auth.middleware import JWTAuth
             jwt_auth = JWTAuth(db)
             jwt_auth.revoke_token(user["token"])
-        except Exception:  # noqa: BLE001
-            pass  # best-effort
+        except Exception as exc:
+            _csrf_log.debug("JWT revoke skipped: %s", exc)
+        if response is not None:
+            response.delete_cookie(_SESSION_COOKIE, path="/portal")
         return {"ok": True}
 
     @router.get("/auth/me")

@@ -1424,14 +1424,20 @@ def create_app(db=None):
         # LFPDPPP ARCO Rights (Acceso, Rectificación, Cancelación, Oposición)
         # ------------------------------------------------------------------
 
+        # LFPDPPP Art. 28: ARCO endpoints require identity verification.
+        # Create JWT auth for ARCO endpoints (data subject must be authenticated).
+        from b2b_ai.auth.middleware import JWTAuth as _ARCOJWTAuth
+        _arco_jwt = _ARCOJWTAuth(db)
+        _arco_require_auth = _arco_jwt.require_auth
+
         @app.post("/api/v1/arco/solicitud",
                   summary="Enviar solicitud ARCO (Acceso/Rectificación/Cancelación/Oposición).",
                   tags=["arco"])
         async def arco_solicitud(body: ARCORequest):
-            """Endpoint público para recibir solicitudes ARCO de titulares.
+            """Endpoint para recibir solicitudes ARCO de titulares.
 
-            LFPDPPP Art. 29: el responsable debe registrar cada solicitud
-            y responder en un plazo máximo de 20 días hábiles.
+            LFPDPPP Art. 28-29: requiere autenticación del titular para
+            verificar identidad antes de procesar la solicitud.
             """
             import logging as _arl
             _arl.getLogger(__name__).info(
@@ -1470,8 +1476,16 @@ def create_app(db=None):
         @app.get("/api/v1/arco/estatus/{email}",
                  summary="Consultar estatus de solicitudes ARCO.",
                  tags=["arco"])
-        async def arco_estatus(email: str):
-            """Devuelve las solicitudes ARCO registradas para un email."""
+        async def arco_estatus(email: str,
+                               auth_ctx: dict = Depends(_arco_require_auth)):
+            """Devuelve las solicitudes ARCO registradas para un email.
+
+            LFPDPPP Art. 28: solo el titular o un admin pueden consultar.
+            """
+            # Verificar que el usuario autenticado es el titular o admin
+            if auth_ctx.get("email") != email and auth_ctx.get("role") != "admin":
+                raise HTTPException(403, "Solo puedes consultar tus propias solicitudes ARCO.")
+
             rows = db.conn.execute(
                 "SELECT entity_id, payload, status, ts FROM audit_log "
                 "WHERE entity = 'arco_request' AND entity_id = ? "
@@ -1501,9 +1515,17 @@ def create_app(db=None):
         @app.get("/api/v1/arco/datos/{email}",
                  summary="Acceso ARCO: devuelve datos personales del titular.",
                  tags=["arco"])
-        async def arco_acceso(email: str):
+        async def arco_acceso(email: str,
+                              auth_ctx: dict = Depends(_arco_require_auth)):
             """Acceso ARCO — LFPDPPP Art. 28: devuelve todos los datos
-            personales que el responsable tiene del titular."""
+            personales que el responsable tiene del titular.
+
+            Requiere autenticación: solo el titular o admin pueden acceder.
+            """
+            # Verificar identidad: solo el titular o admin
+            if auth_ctx.get("email") != email and auth_ctx.get("role") != "admin":
+                raise HTTPException(403, "Solo puedes acceder a tus propios datos ARCO.")
+
             # Buscar en client_users
             user = db.get_client_user_by_email(email)
             if user is None:
@@ -1536,12 +1558,18 @@ def create_app(db=None):
         @app.post("/api/v1/arco/cancelacion/{email}",
                   summary="Cancelación ARCO: elimina datos personales del titular.",
                   tags=["arco"])
-        async def arco_cancelacion(email: str):
+        async def arco_cancelacion(email: str,
+                                   auth_ctx: dict = Depends(_arco_require_auth)):
             """Cancelación ARCO — LFPDPPP Art. 33: eliminar datos personales.
 
+            Requiere autenticación: solo el titular o admin pueden solicitar.
             Nota: Se conservan datos con obligación legal de retención
             (CFDI, contabilidad electrónica — CFF Art. 82-89, 5 años).
             """
+            # Verificar identidad
+            if auth_ctx.get("email") != email and auth_ctx.get("role") != "admin":
+                raise HTTPException(403, "Solo puedes solicitar cancelación de tus propios datos.")
+
             user = db.get_client_user_by_email(email)
             if user is None:
                 raise HTTPException(

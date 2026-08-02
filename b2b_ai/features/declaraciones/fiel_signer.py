@@ -51,7 +51,7 @@ class FIELSigner:
         signer = FIELSigner.from_files(
             cer_path="certificates/ABC/rfc.cer",
             key_path="certificates/ABC/rfc.key",
-            password="password123",
+            password=os.environ["FIEL_PASSWORD"],
         )
         signed_xml = signer.sign_declaration(xml_bytes)
     """

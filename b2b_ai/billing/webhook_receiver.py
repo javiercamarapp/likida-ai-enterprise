@@ -307,6 +307,7 @@ class ConektaWebhookReceiver:
         self,
         payload: Dict[str, Any],
         signature_header: str = "",
+        raw_body: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Procesa un evento de webhook de Conekta de punta a punta.
 
@@ -319,6 +320,8 @@ class ConektaWebhookReceiver:
         Args:
             payload:          JSON body del webhook (ya parseado).
             signature_header: Header 'conekta-signature' del request.
+            raw_body:         Raw request body string (para verificación de firma).
+                            Si no se provee, se re-serializa el payload (menos seguro).
 
         Returns:
             Dict con el resultado del procesamiento.
@@ -327,8 +330,9 @@ class ConektaWebhookReceiver:
             HTTPException 401: Firma inválida o ausente.
             HTTPException 400: Payload inválido.
         """
-        # 1. Verificar firma
-        payload_body = json.dumps(payload, separators=(",", ":"))
+        # 1. Verificar firma — use raw_body if available to avoid re-serialization
+        # mismatches (C-03 fix: re-serialization can produce different JSON)
+        payload_body = raw_body if raw_body is not None else json.dumps(payload, separators=(",", ":"))
         if not self.verify_signature(payload_body, signature_header):
             logger.warning(
                 "Webhook rejected: invalid signature (type=%s)",

@@ -89,7 +89,7 @@ class SATSubmitter:
         submitter = SATSubmitter(
             cer_path="certificates/ABC/rfc.cer",
             key_path="certificates/ABC/rfc.key",
-            password="password123",
+            password=os.environ["FIEL_PASSWORD"],
         )
         result = submitter.submit_declaration(xml_signed, "iva", "2024-07")
     """

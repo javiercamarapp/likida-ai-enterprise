@@ -74,12 +74,30 @@ document.querySelectorAll('.accordion-header').forEach(btn => {
 });
 
 // ─── Form ───
-function handleSubmit(e) {
+async function handleSubmit(e) {
   e.preventDefault();
-  const data = new FormData(e.target);
-  const name = data.get('name');
-  alert('¡Gracias ' + name + '! Nos pondremos en contacto contigo pronto.');
-  e.target.reset();
+  const form = e.target;
+  const data = Object.fromEntries(new FormData(form));
+  const btn = form.querySelector('button[type="submit"]');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch('/api/v1/leads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (res.ok) {
+      alert('¡Gracias ' + (data.name || '') + '! Nos pondremos en contacto contigo pronto.');
+      form.reset();
+    } else {
+      const err = await res.json().catch(() => ({}));
+      alert('Error al enviar: ' + (err.detail || 'Intenta de nuevo.'));
+    }
+  } catch (err) {
+    alert('Error de conexión. Intenta de nuevo más tarde.');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 // Attach form handler via addEventListener (replaces inline onsubmit for CSP compliance)

@@ -159,13 +159,20 @@ def _cipher():
 
 
 def encrypt_field(value: str) -> str:
-    """Cifra `value` en reposo. Sin clave configurada, devuelve el valor tal
-    cual (degradado transparente). Los valores ya cifrados no se recifran."""
+    """Cifra `value` en reposo con AES-GCM.
+
+    Raises RuntimeError si no hay clave configurada — nunca degrada a
+    plaintext silenciosamente (los datos sensibles quedarían en claro).
+    Los valores ya cifrados no se recifran.
+    """
     if not value or value.startswith(_CIPHER_PREFIX):
         return value
     c = _cipher()
     if c is None:
-        return value
+        raise RuntimeError(
+            "encrypt_field() called but B2B_ENCRYPTION_KEY is not configured. "
+            "Set B2B_ENCRYPTION_KEY (>= 16 chars) to enable AES-GCM encryption."
+        )
     import os as _os
     nonce = _os.urandom(12)
     ct = c.encrypt(nonce, value.encode("utf-8"), None)

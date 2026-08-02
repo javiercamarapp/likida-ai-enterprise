@@ -35,9 +35,13 @@ from fastapi import Depends, Header, HTTPException, Request
 
 from b2b_ai.auth.roles import has_permission
 
-# In-memory token blacklist (JTI -> expiry timestamp).
-# In production, replace with Redis SET with TTL or DB table.
-_token_blacklist: Dict[str, float] = {}
+# Token blacklist: DB-backed with in-memory fallback.
+# In production, revoked tokens are stored in the database so logout works
+# across all workers and survives restarts. Falls back to in-memory dict
+# for dev/test when no DB is available.
+_token_blacklist: Dict[str, float] = {}  # in-memory fallback
+_db_ref: Any = None  # set by JWTAuth.__init__ when db is available
+_BLACKLIST_TABLE = "token_blacklist"
 
 # TTLs por tipo de token (segundos), ajustables por env.
 ACCESS_TTL = int(os.environ.get("B2B_JWT_ACCESS_TTL", "1800"))      # 30 min
@@ -202,6 +206,16 @@ class JWTAuth:
     def __init__(self, db: Any, secret: Optional[str] = None) -> None:
         self._db = db
         self._secret = secret or jwt_secret()
+        # Register db ref for DB-backed blacklist
+        global _db_ref
+        _db_ref = db
+        # Ensure blacklist table exists (best-effort)
+        try:
+            db.conn.execute(
+                f"CREATE TABLE IF NOT EXISTS {_BLACKLIST_TABLE} "
+                "(jti TEXT PRIMARY KEY, exp REAL NOT NULL)")
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---- Emisión ---------------------------------------------------------
     def access_token(self, user: Dict[str, Any]) -> str:
@@ -243,10 +257,22 @@ class JWTAuth:
         if claims.get("type") != "access":
             raise HTTPException(status_code=401,
                                 detail="Token no es de acceso.")
-        # Check token blacklist (revoked tokens)
+        # Check token blacklist (revoked tokens) — DB-backed
         jti = claims.get("jti")
-        if jti and jti in _token_blacklist:
-            raise HTTPException(status_code=401, detail="Token revocado.")
+        if jti:
+            revoked = False
+            if _db_ref is not None:
+                try:
+                    row = _db_ref.conn.execute(
+                        f"SELECT 1 FROM {_BLACKLIST_TABLE} WHERE jti=?",
+                        (jti,)).fetchone()
+                    revoked = row is not None
+                except Exception:  # noqa: BLE001
+                    revoked = jti in _token_blacklist
+            else:
+                revoked = jti in _token_blacklist
+            if revoked:
+                raise HTTPException(status_code=401, detail="Token revocado.")
         try:
             user_id = int(claims["sub"])
         except (KeyError, ValueError, TypeError):
@@ -296,7 +322,11 @@ class JWTAuth:
         return dep
 
     def revoke_token(self, token: str) -> None:
-        """Blacklist a token so it cannot be reused after logout."""
+        """Blacklist a token so it cannot be reused after logout.
+
+        Stores in DB (survives restarts, visible across workers) with
+        in-memory fallback for dev/test.
+        """
         try:
             claims = self.decode(token)
         except JWTError:
@@ -305,19 +335,44 @@ class JWTAuth:
         if not jti:
             return
         exp = claims.get("exp", time.time() + ACCESS_TTL)
+        # Try DB-backed storage first
+        if _db_ref is not None:
+            try:
+                _db_ref.conn.execute(
+                    f"INSERT OR IGNORE INTO {_BLACKLIST_TABLE}(jti, exp) "
+                    "VALUES (?, ?)", (jti, float(exp)))
+                _db_ref.conn.commit()
+                # Cleanup expired entries
+                _db_ref.conn.execute(
+                    f"DELETE FROM {_BLACKLIST_TABLE} WHERE exp < ?",
+                    (time.time(),))
+                _db_ref.conn.commit()
+                return
+            except Exception:  # noqa: BLE001 — fall through to memory
+                pass
+        # In-memory fallback (thread-safe with dict operations in CPython)
         _token_blacklist[jti] = float(exp)
-        # Cleanup expired entries
         now = time.time()
         expired = [k for k, v in _token_blacklist.items() if v < now]
         for k in expired:
             _token_blacklist.pop(k, None)
 
     def is_token_revoked(self, token: str) -> bool:
-        """Check if a token has been revoked."""
+        """Check if a token has been revoked (DB-backed)."""
         try:
             claims = self.decode(token)
             jti = claims.get("jti")
-            return jti is not None and jti in _token_blacklist
+            if not jti:
+                return False
+            if _db_ref is not None:
+                try:
+                    row = _db_ref.conn.execute(
+                        f"SELECT 1 FROM {_BLACKLIST_TABLE} WHERE jti=?",
+                        (jti,)).fetchone()
+                    return row is not None
+                except Exception:  # noqa: BLE001
+                    pass
+            return jti in _token_blacklist
         except JWTError:
             return True
 
